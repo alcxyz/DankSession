@@ -16,15 +16,15 @@ in {
 
     autoStart = lib.mkOption {
       type = lib.types.bool;
-      default = true;
-      description = "Start the capture daemon with the graphical session.";
+      default = false;
+      description = "Start the capture daemon with the graphical session. Disabled by default during QA.";
     };
   };
 
   config = lib.mkIf cfg.enable {
     home.packages = [cfg.package];
 
-    systemd.user.services.danksession = lib.mkIf cfg.autoStart {
+    systemd.user.services.danksession = {
       Unit = {
         Description = "Capture and restore the DankSession desktop state";
         PartOf = ["graphical-session.target"];
@@ -35,7 +35,9 @@ in {
         Restart = "on-failure";
         RestartSec = 2;
       };
-      Install.WantedBy = ["graphical-session.target"];
+      Install = lib.optionalAttrs cfg.autoStart {
+        WantedBy = ["graphical-session.target"];
+      };
     };
   };
 }

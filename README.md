@@ -4,7 +4,7 @@ Application session restoration for [DankMaterialShell](https://github.com/Aveng
 
 ## Status
 
-DankSession is under local development. It is not published or ready for unattended restoration yet.
+DankSession is under pre-release QA. It is not ready for unattended restoration yet; the Home Manager module installs its daemon without enabling automatic startup by default.
 
 ## Commands
 
