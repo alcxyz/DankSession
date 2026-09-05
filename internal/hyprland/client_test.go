@@ -1,0 +1,43 @@
+package hyprland
+
+import "testing"
+
+func TestDispatchExpressionUsesHyprlandLuaAPI(t *testing.T) {
+	tests := []struct {
+		dispatcher string
+		argument   string
+		want       string
+	}{
+		{"focuswindow", "address:0xabc", `hl.dsp.focus({ window = "address:0xabc" })`},
+		{"workspace", "5", `hl.dsp.focus({ workspace = 5 })`},
+		{"movetoworkspacesilent", "5,address:0xabc", `hl.dsp.window.move({ workspace = 5, window = "address:0xabc", follow = false })`},
+		{"movetoworkspacesilent", "special:danksession-staging,address:0xabc", `hl.dsp.window.move({ workspace = "special:danksession-staging", window = "address:0xabc", follow = false })`},
+		{"moveworkspacetomonitor", "5 DP-1", `hl.dsp.workspace.move({ workspace = 5, monitor = "DP-1" })`},
+		{"setfloating", "address:0xabc", `hl.dsp.window.float({ action = "set", window = "address:0xabc" })`},
+		{"settiled", "address:0xabc", `hl.dsp.window.float({ action = "unset", window = "address:0xabc" })`},
+		{"resizewindowpixel", "exact 1200 800,address:0xabc", `hl.dsp.window.resize({ x = 1200, y = 800, relative = false, window = "address:0xabc" })`},
+		{"movewindowpixel", "exact -20 30,address:0xabc", `hl.dsp.window.move({ x = -20, y = 30, relative = false, window = "address:0xabc" })`},
+		{"fullscreenstate", "2,1,address:0xabc", `hl.dsp.window.fullscreen_state({ internal = 2, client = 1, action = "set", window = "address:0xabc" })`},
+		{"layoutmsg", "colresize 0.500000", `hl.dsp.layout("colresize 0.500000")`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.dispatcher+"/"+test.argument, func(t *testing.T) {
+			got, err := dispatchExpression(test.dispatcher, test.argument)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("got %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestDispatchExpressionRejectsLegacyOrMalformedActions(t *testing.T) {
+	for _, test := range [][2]string{{"focusmonitor", ""}, {"movetoworkspacesilent", "5"}, {"fullscreenstate", "3,0,address:0xabc"}, {"legacy", "anything"}} {
+		if _, err := dispatchExpression(test[0], test[1]); err == nil {
+			t.Fatalf("%s %q unexpectedly succeeded", test[0], test[1])
+		}
+	}
+}

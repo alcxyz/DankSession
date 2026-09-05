@@ -1,0 +1,40 @@
+{
+  "id": "dankSession",
+  "name": "DankSession",
+  "description": "Capture and restore application windows, workspaces, and layout",
+  "version": "0.1.0",
+  "author": "alcxyz",
+  "icon": "restore_page",
+  "type": "widget",
+  "capabilities": ["dankbar-widget"],
+  "component": "./SessionWidget.qml",
+  "settings": "./SessionSettings.qml",
+  "settings_schema": {
+    "autoRestore": {
+      "type": "boolean",
+      "default": false
+    },
+    "captureUnconfigured": {
+      "type": "boolean",
+      "default": true
+    },
+    "captureTitles": {
+      "type": "boolean",
+      "default": false
+    },
+    "captureInterval": {
+      "type": "integer",
+      "default": 15,
+      "minimum": 5,
+      "maximum": 120
+    },
+    "restoreTimeout": {
+      "type": "integer",
+      "default": 20,
+      "minimum": 5,
+      "maximum": 120
+    }
+  },
+  "permissions": ["settings_read", "settings_write", "process"],
+  "requires": ["danksession", "hyprctl"]
+}
