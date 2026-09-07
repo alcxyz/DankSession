@@ -100,16 +100,27 @@ type RestoreResult struct {
 }
 
 type Status struct {
-	AutoCapture     bool      `json:"autoCapture"`
-	CaptureInterval int       `json:"captureIntervalSeconds"`
-	Saved           bool      `json:"saved"`
-	SavedAt         time.Time `json:"savedAt,omitempty"`
-	Windows         int       `json:"windows"`
-	Managed         int       `json:"managed"`
-	Workspaces      int       `json:"workspaces"`
-	AutoRestore     bool      `json:"autoRestore"`
-	DaemonRunning   bool      `json:"daemonRunning"`
-	StatePath       string    `json:"statePath"`
+	AutoCapture     bool                 `json:"autoCapture"`
+	CaptureInterval int                  `json:"captureIntervalSeconds"`
+	Saved           bool                 `json:"saved"`
+	SavedAt         time.Time            `json:"savedAt,omitempty"`
+	Windows         int                  `json:"windows"`
+	Managed         int                  `json:"managed"`
+	Workspaces      int                  `json:"workspaces"`
+	AutoRestore     bool                 `json:"autoRestore"`
+	DaemonRunning   bool                 `json:"daemonRunning"`
+	StatePath       string               `json:"statePath"`
+	SavedWindows    []SavedWindowSummary `json:"savedWindows"`
+}
+
+// SavedWindowSummary exposes the saved placement and current restore capability
+// without copying private snapshot fields such as titles or monitor identities.
+type SavedWindowSummary struct {
+	Application string                `json:"application"`
+	Workspace   hyprland.WorkspaceRef `json:"workspace"`
+	Width       int                   `json:"width"`
+	Height      int                   `json:"height"`
+	Restore     string                `json:"restore"`
 }
 
 type Compositor interface {
@@ -349,7 +360,7 @@ func (m *Manager) Status() (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	status := Status{AutoRestore: cfg.AutoRestore, AutoCapture: cfg.AutoCapture, CaptureInterval: cfg.CaptureInterval, StatePath: m.StatePath}
+	status := Status{AutoRestore: cfg.AutoRestore, AutoCapture: cfg.AutoCapture, CaptureInterval: cfg.CaptureInterval, StatePath: m.StatePath, SavedWindows: []SavedWindowSummary{}}
 	status.DaemonRunning, err = m.DaemonRunning()
 	if err != nil {
 		return Status{}, err
@@ -372,7 +383,48 @@ func (m *Manager) Status() (Status, error) {
 		}
 	}
 	status.Workspaces = len(workspaces)
+	status.SavedWindows = summarizeSavedWindows(snapshot.Windows, cfg)
 	return status, nil
+}
+
+func summarizeSavedWindows(windows []Window, cfg Config) []SavedWindowSummary {
+	rows := make([]SavedWindowSummary, 0, len(windows))
+	for _, saved := range windows {
+		label := saved.Application
+		if label == "" {
+			label = saved.InitialClass
+		}
+		if label == "" {
+			label = saved.Class
+		}
+		if label == "" {
+			label = "Unknown application"
+		}
+		capability := "placement"
+		if _, ok := configuredApplication(saved.Application, cfg.Applications); saved.Application != "" && ok {
+			capability = "relaunch"
+		}
+		if specialWorkspace(saved.Workspace) || excludedSaved(saved, cfg.Exclude) || (saved.Application == "" && !cfg.CaptureUnconfigured) {
+			capability = "excluded"
+		}
+		rows = append(rows, SavedWindowSummary{
+			Application: label,
+			Workspace:   saved.Workspace,
+			Width:       saved.Size[0],
+			Height:      saved.Size[1],
+			Restore:     capability,
+		})
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].Workspace.ID != rows[j].Workspace.ID {
+			return rows[i].Workspace.ID < rows[j].Workspace.ID
+		}
+		if rows[i].Workspace.Name != rows[j].Workspace.Name {
+			return rows[i].Workspace.Name < rows[j].Workspace.Name
+		}
+		return rows[i].Application < rows[j].Application
+	})
+	return rows
 }
 
 func (m *Manager) Restore(ctx context.Context, dryRun, noLaunch bool) (result RestoreResult, restoreErr error) {

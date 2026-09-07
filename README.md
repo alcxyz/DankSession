@@ -30,6 +30,13 @@ The bar shows only the session icon: accented while automatic saving is running,
 muted while paused or stopped, and red on errors. Click it for window counts,
 the last save time, and Save now, Restore, and Preview actions.
 
+The popout lists the actual saved snapshot, not currently open windows: each row
+shows the application identifier, workspace, saved dimensions, and whether it can
+reopen, needs an already-running window (placement only), or is skipped by current
+rules. This is not a guarantee of successful restoration; Preview checks the live
+desktop. The panel fits short lists and scrolls longer ones. This summary never
+includes window titles or launch commands, even when title capture is enabled.
+
 In plugin settings, **Automatic saving** pauses or resumes background capture without stopping the daemon. **Save frequency** controls periodic safety saves (5–120 seconds, default 15); desktop events can save sooner. Preference changes are picked up by the running daemon without a restart. Manual **Save now** remains available while automatic saving is paused. A stopped-service warning explains when automatic saving and login restoration are unavailable.
 
 ### Application exclusions
@@ -110,6 +117,10 @@ go build ./cmd/danksession
 bash test.sh
 nix build
 ```
+
+`QT_QPA_PLATFORM=offscreen quickshell -p tests/qml --no-duplicate` runs isolated popout layout checks with
+lightweight visual stubs, without loading DMS services or touching saved sessions.
+Expect `POPOUT QA PASSED`; also check the installed popout in DMS during UI QA.
 
 For an opt-in live scrolling-width and stacked-height test, run
 `DANKSESSION_LIVE_TEST=1 go test ./internal/session -run TestLiveScrollingSizeRestore -v`.

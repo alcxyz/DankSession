@@ -16,7 +16,6 @@ PluginComponent {
     property int captureInterval: 15
     property int restoreTimeout: 20
     property var sessionStatus: ({saved: false, windows: 0, managed: 0, workspaces: 0})
-    property string statusText: "No snapshot"
     property string actionOutput: ""
     property bool statusError: false
     property bool actionError: false
@@ -160,12 +159,8 @@ PluginComponent {
                 if (parsed.error) throw new Error(parsed.error)
                 root.sessionStatus = parsed
                 root.updateSavedAge()
-                root.statusText = parsed.saved
-                    ? (parsed.windows + " windows across " + parsed.workspaces + " workspaces")
-                    : "No snapshot"
                 root.statusError = false
             } catch (error) {
-                root.statusText = "Backend unavailable"
                 root.statusError = true
             }
         }
@@ -215,117 +210,22 @@ PluginComponent {
     }
 
     popoutContent: Component {
-        Item {
-            implicitWidth: root.popoutWidth
-            implicitHeight: root.popoutHeight
-
-            Column {
-                anchors.fill: parent
-                spacing: Theme.spacingL
-
-                StyledText {
-                    text: "Session"
-                    font.pixelSize: Theme.fontSizeXLarge
-                    font.weight: Font.Bold
-                    color: Theme.surfaceText
-                }
-
-                StyledText {
-                    width: parent.width
-                    text: root.statusText
-                    font.pixelSize: Theme.fontSizeMedium
-                    color: root.hasError ? Theme.error : Theme.surfaceVariantText
-                    wrapMode: Text.WordWrap
-                }
-
-                StyledText {
-                    width: parent.width
-                    visible: root.sessionStatus.saved
-                    text: root.sessionStatus.managed + " windows with launch rules · " + root.savedAge
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.surfaceVariantText
-                    wrapMode: Text.WordWrap
-                }
-
-                Row {
-                    spacing: Theme.spacingM
-
-                    Rectangle {
-                        width: 96
-                        height: 36
-                        radius: Theme.cornerRadius
-                        color: saveMouse.containsMouse ? Theme.withAlpha(Theme.primary, 0.3) : Theme.primary
-                        opacity: root.actionBusy ? 0.5 : 1
-                        StyledText { text: "Save now"; color: "#ffffff"; anchors.centerIn: parent }
-                        MouseArea {
-                            id: saveMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            enabled: !root.actionBusy
-                            onClicked: root.runAction("capture")
-                        }
-                    }
-
-                    Rectangle {
-                        width: 96
-                        height: 36
-                        radius: Theme.cornerRadius
-                        color: restoreMouse.containsMouse ? Theme.withAlpha(Theme.primary, 0.25) : Theme.surfaceContainerHigh
-                        opacity: root.actionBusy || !root.sessionStatus.saved ? 0.5 : 1
-                        StyledText { text: "Restore"; color: Theme.surfaceText; anchors.centerIn: parent }
-                        MouseArea {
-                            id: restoreMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            enabled: !root.actionBusy && root.sessionStatus.saved
-                            onClicked: root.runAction("restore")
-                        }
-                    }
-
-                    Rectangle {
-                        width: 96
-                        height: 36
-                        radius: Theme.cornerRadius
-                        color: Theme.surfaceContainerHigh
-                        opacity: root.actionBusy || !root.sessionStatus.saved ? 0.5 : 1
-                        StyledText { text: "Preview"; color: Theme.surfaceText; anchors.centerIn: parent }
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            enabled: !root.actionBusy && root.sessionStatus.saved
-                            onClicked: root.runAction("restore", true)
-                        }
-                    }
-                }
-
-                StyledText {
-                    width: parent.width
-                    visible: root.actionOutput !== ""
-                    text: root.actionOutput
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: root.hasError ? Theme.error : Theme.surfaceVariantText
-                    wrapMode: Text.WrapAnywhere
-                    maximumLineCount: 8
-                    elide: Text.ElideRight
-                }
-
-                StyledText {
-                    width: parent.width
-                    text: !root.sessionStatus.daemonRunning
-                        ? "Capture daemon is stopped. Saving and restoring are manual; login restoration also requires daemon startup to be enabled in your system configuration."
-                        : ((!root.autoCapture ? "Automatic saving is paused. "
-                            : "Saving changes automatically, with a safety save every " + root.captureInterval + " seconds. ")
-                            + (root.autoRestore ? "Restore after login is enabled." : "Restore after login is disabled."))
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.surfaceVariantText
-                    wrapMode: Text.WordWrap
-                }
-            }
+        SessionPopout {
+            sessionStatus: root.sessionStatus
+            savedAge: root.savedAge
+            autoCapture: root.autoCapture
+            autoRestore: root.autoRestore
+            captureInterval: root.captureInterval
+            statusError: root.statusError
+            configureError: root.configureError
+            actionError: root.actionError
+            actionOutput: root.actionOutput
+            busy: root.actionBusy
+            onActionRequested: (command, dryRun) => root.runAction(command, dryRun)
         }
     }
 
     popoutWidth: 360
-    popoutHeight: 440
+    // DMS measures SessionPopout.implicitHeight after loading its content.
+    popoutHeight: 0
 }

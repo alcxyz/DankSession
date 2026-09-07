@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0 — QA
+
+- List saved application windows, workspaces, dimensions, and current restore
+  eligibility directly in the popout, without exposing titles or launch commands.
+- Fit the popout to its content, scroll longer lists, and consolidate saving and
+  login restoration status into one line.
+
 ## 0.2.1 — QA
 
 - Use one compact icon in horizontal and vertical bars. Keep snapshot counts,
