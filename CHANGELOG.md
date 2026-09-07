@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2 — QA
+
+- Measure the dynamically loaded popout through its wrapper item, keeping
+  compatibility with Qt's read-only Loader implicit dimensions.
+
 ## 0.3.1 — QA
 
 - Load the new popout by URL so existing DMS sessions can pick it up without a

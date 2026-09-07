@@ -5,6 +5,8 @@ import Quickshell
 // No backend commands or private files are accessed.
 ShellRoot {
     id: test
+    // Compile the complete widget as well, but never instantiate its processes.
+    Component { SessionWidget {} }
     property int phase: 0
     property bool failed: false
     property real emptyHeight: 0
