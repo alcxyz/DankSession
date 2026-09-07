@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -83,6 +85,7 @@ func run(args []string) error {
 			return err
 		}
 		flags := flag.NewFlagSet("configure", flag.ContinueOnError)
+		autoCapture := flags.Bool("auto-capture", cfg.AutoCapture, "automatically save desktop changes while the daemon runs")
 		autoRestore := flags.Bool("auto-restore", cfg.AutoRestore, "restore the last session when the daemon starts")
 		captureUnconfigured := flags.Bool("capture-unconfigured", cfg.CaptureUnconfigured, "capture windows without a launch rule")
 		captureTitles := flags.Bool("capture-titles", cfg.CaptureTitles, "store window titles in the local snapshot")
@@ -92,22 +95,100 @@ func run(args []string) error {
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
-		cfg.AutoRestore = *autoRestore
-		cfg.CaptureUnconfigured = *captureUnconfigured
-		cfg.CaptureTitles = *captureTitles
-		cfg.DebounceMS = *debounceMS
-		cfg.CaptureInterval = *captureInterval
-		cfg.RestoreTimeout = *restoreTimeout
-		if err := manager.SaveConfig(cfg); err != nil {
+		if flags.NArg() != 0 {
+			return errors.New("configure accepts flags only")
+		}
+		// Only replace explicitly supplied preferences under the config lock.
+		// An exclusion editor may have changed the file since parsing began.
+		if err := manager.UpdateConfig(func(current *session.Config) error {
+			flags.Visit(func(value *flag.Flag) {
+				switch value.Name {
+				case "auto-capture":
+					current.AutoCapture = *autoCapture
+				case "auto-restore":
+					current.AutoRestore = *autoRestore
+				case "capture-unconfigured":
+					current.CaptureUnconfigured = *captureUnconfigured
+				case "capture-titles":
+					current.CaptureTitles = *captureTitles
+				case "debounce-ms":
+					current.DebounceMS = *debounceMS
+				case "capture-interval":
+					current.CaptureInterval = *captureInterval
+				case "restore-timeout":
+					current.RestoreTimeout = *restoreTimeout
+				}
+			})
+			if current.CaptureInterval < 1 || current.RestoreTimeout < 1 || current.DebounceMS < 100 {
+				return errors.New("capture interval and restore timeout must be positive; debounce must be at least 100 ms")
+			}
+			cfg = *current
+			return nil
+		}); err != nil {
 			return err
 		}
 		writeJSON(cfg)
+		return nil
+	case "exclusions":
+		if len(args) != 2 {
+			return errors.New("usage: danksession exclusions list|preview|update (preview/update read JSON from stdin)")
+		}
+		switch args[1] {
+		case "list":
+			result, err := manager.ExclusionSettings(ctx)
+			if err != nil {
+				return err
+			}
+			writeJSON(result)
+		case "preview":
+			var match session.Match
+			if err := readInputJSON(&match); err != nil {
+				return err
+			}
+			result, err := manager.PreviewExclusion(ctx, match)
+			if err != nil {
+				return err
+			}
+			writeJSON(result)
+		case "update":
+			var request session.ExclusionUpdate
+			if err := readInputJSON(&request); err != nil {
+				return err
+			}
+			result, err := manager.UpdateExclusion(ctx, request)
+			if err != nil {
+				return err
+			}
+			writeJSON(result)
+		default:
+			return errors.New("unknown exclusions action; use list, preview, or update")
+		}
 		return nil
 	case "daemon":
 		return runDaemon(manager)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func readInputJSON(target any) error {
+	data, err := io.ReadAll(io.LimitReader(os.Stdin, 65537))
+	if err != nil {
+		return err
+	}
+	if len(data) > 65536 {
+		return errors.New("request exceeds 64 KiB")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return fmt.Errorf("invalid request JSON: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return errors.New("request must contain a single JSON object")
+	}
+	return nil
 }
 
 func runDaemon(manager *session.Manager) error {
@@ -143,8 +224,10 @@ func runDaemon(manager *session.Manager) error {
 			writeJSON(map[string]any{"event": "restored", "matched": result.Matched, "missing": result.Missing, "launched": result.Launched})
 		}
 	}
-	if _, err := manager.Capture(ctx); err != nil {
-		return err
+	if cfg.AutoCapture {
+		if _, err := manager.Capture(ctx); err != nil {
+			return err
+		}
 	}
 
 	events, eventErrors := client.Events(ctx)
@@ -154,6 +237,8 @@ func runDaemon(manager *session.Manager) error {
 func captureLoop(ctx context.Context, manager *session.Manager, cfg session.Config, events <-chan string, eventErrors <-chan error) error {
 	interval := time.NewTicker(time.Duration(cfg.CaptureInterval) * time.Second)
 	defer interval.Stop()
+	preferences := time.NewTicker(time.Second)
+	defer preferences.Stop()
 	var debounce *time.Timer
 	var debounceC <-chan time.Time
 	defer func() {
@@ -169,12 +254,20 @@ func captureLoop(ctx context.Context, manager *session.Manager, cfg session.Conf
 		debounce = time.NewTimer(time.Duration(cfg.DebounceMS) * time.Millisecond)
 		debounceC = debounce.C
 	}
+	reloadPreferences := func() bool {
+		updated, err := manager.LoadConfig()
+		if err != nil {
+			return false
+		}
+		if updated.CaptureInterval != cfg.CaptureInterval {
+			interval.Reset(time.Duration(updated.CaptureInterval) * time.Second)
+		}
+		cfg = updated
+		return true
+	}
 	capture := func() {
-		if updated, err := manager.LoadConfig(); err == nil {
-			if updated.CaptureInterval != cfg.CaptureInterval {
-				interval.Reset(time.Duration(updated.CaptureInterval) * time.Second)
-			}
-			cfg = updated
+		if !reloadPreferences() || !cfg.AutoCapture {
+			return
 		}
 		if _, err := manager.Capture(ctx); err != nil && !errors.Is(err, session.ErrBusy) && !errors.Is(err, context.Canceled) {
 			writeJSON(map[string]any{"event": "capture-error", "error": err.Error()})
@@ -210,6 +303,8 @@ func captureLoop(ctx context.Context, manager *session.Manager, cfg session.Conf
 			eventErrors = nil
 		case <-interval.C:
 			capture()
+		case <-preferences.C:
+			reloadPreferences()
 		case <-debounceC:
 			debounceC = nil
 			capture()
@@ -243,6 +338,9 @@ Usage:
   danksession restore [--dry-run] [--no-launch]
   danksession status
   danksession configure [options]
+  danksession exclusions list
+  danksession exclusions preview < match.json
+  danksession exclusions update < request.json
   danksession daemon
   danksession --version
 `

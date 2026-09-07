@@ -6,12 +6,15 @@ version="$(jq -r .version plugin.json)"
 
 go test ./...
 go vet ./...
-go build -ldflags "-X main.version=$version" -o danksession ./cmd/danksession
-trap 'rm -f danksession' EXIT
+temporary="$(mktemp -d)"
+trap 'rm -rf "$temporary"' EXIT
+test_binary="$temporary/danksession"
+go build -ldflags "-X main.version=$version" -o "$test_binary" ./cmd/danksession
 
-[[ "$(./danksession --version)" == "$version" ]]
-./danksession --help | grep -q 'restore'
-./danksession --help | grep -q 'daemon'
+[[ "$("$test_binary" --version)" == "$version" ]]
+"$test_binary" --help | rg -q 'restore'
+"$test_binary" --help | rg -q 'daemon'
+"$test_binary" --help | rg -q 'exclusions'
 
 jq -e '
   .id == "dankSession"
@@ -21,19 +24,21 @@ jq -e '
   and (.permissions | index("process")) != null
 ' plugin.json >/dev/null
 
-grep -q 'pluginId: "dankSession"' SessionWidget.qml
-grep -q 'pluginId: "dankSession"' SessionSettings.qml
-grep -q 'danksession daemon' nix/home-manager.nix
+rg -q 'pluginId: "dankSession"' SessionWidget.qml
+rg -q 'pluginId: "dankSession"' SessionSettings.qml
+rg -q 'ExclusionEditor' SessionSettings.qml
+rg -q '"danksession", "exclusions", "preview"' ExclusionEditor.qml
+rg -q 'danksession daemon' nix/home-manager.nix
 
 test ! -e go.sum
 
-temporary="$(mktemp -d)"
-trap 'rm -rf "$temporary"; rm -f danksession' EXIT
 export DANKSESSION_STATE="$temporary/state/last.json"
 export DANKSESSION_CONFIG="$temporary/config/config.json"
 
-./danksession configure --auto-restore=false --capture-titles=false >/dev/null
+"$test_binary" configure --auto-restore=false --capture-titles=false >/dev/null
 [[ "$(stat -c %a "$DANKSESSION_CONFIG")" == 600 ]]
-./danksession status | jq -e '.saved == false and .autoRestore == false' >/dev/null
+"$test_binary" status | jq -e '.saved == false and .autoRestore == false and .autoCapture == true' >/dev/null
+"$test_binary" configure --auto-capture=false --capture-interval=25 >/dev/null
+"$test_binary" status | jq -e '.autoCapture == false and .captureIntervalSeconds == 25' >/dev/null
 
 echo "DankSession checks passed"

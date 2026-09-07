@@ -15,6 +15,9 @@ DankSession is under pre-release QA. It is not ready for unattended restoration 
 | `danksession restore --dry-run` | Preview matching, launches, and placement |
 | `danksession restore` | Restore configured applications and window placement |
 | `danksession configure` | Update backend preferences while retaining application rules |
+| `danksession exclusions list` | List exclusion rules and currently open application identifiers |
+| `danksession exclusions preview` | Read a JSON matcher from stdin and preview matching open windows |
+| `danksession exclusions update` | Read a revision-checked exclusion edit from stdin |
 | `danksession daemon` | Capture window events and optionally restore after login |
 
 The default state path is `~/.local/state/danksession/last.json`. Files are written atomically with mode `0600`. Window titles are excluded unless explicitly enabled.
@@ -22,6 +25,16 @@ The default state path is `~/.local/state/danksession/last.json`. Files are writ
 At the first daemon start in each compositor session, the incoming snapshot is retained as `last.json.previous`. Automatic restoration is attempted only once per compositor session; restarting the daemon does not repeat it. Shutdown retains the last completed capture. Capture and restore commands are mutually exclusive, including commands started by the widget while the daemon is running.
 
 The widget shows whether the capture daemon is running and provides a **Preview** action that does not move or launch windows. Enabling “Restore after login” sets a backend preference; enable `services.dankSession.autoStart` separately to start the daemon at graphical login.
+
+In plugin settings, **Automatic saving** pauses or resumes background capture without stopping the daemon. **Save frequency** controls periodic safety saves (5–120 seconds, default 15); desktop events can save sooner. Preference changes are picked up by the running daemon without a restart. Manual **Save now** remains available while automatic saving is paused. A stopped-service warning explains when automatic saving and login restoration are unavailable.
+
+### Application exclusions
+
+Use **Add manually** for an exact application identifier, or select an application from the searchable **Currently open applications** list. Selection uses the initial application class (falling back to its current class), not a changing title. Preview shows matching application identifiers, window counts, and workspaces before confirmation, without exposing window titles. Rules can be edited, disabled/enabled, or removed with confirmation.
+
+Advanced fields accept Go regular expressions; all nonempty fields must match. Exclusions prevent capture, relaunch, and repositioning, including restoration from older snapshots. Editing a rule does not change the desktop or overwrite the saved snapshot. Stale edits are rejected and refreshed so another edit cannot redirect a rule index.
+
+Title rules are conservative: snapshots saved without titles skip every application matching the rule's class fields; a title-only rule skips all windows whose saved title is unknown. An excluded open window is never treated as a reason to relaunch its application. Leave title empty for ordinary application exclusions.
 
 Restore closes the popout before changing the desktop so it cannot hold keyboard focus away from Hyprland's layout commands. Reopen the widget to inspect the result.
 
@@ -33,6 +46,7 @@ DankSession never derives launch commands from `/proc` or saved process command 
 
 ```json
 {
+  "autoCapture": true,
   "autoRestore": false,
   "captureUnconfigured": true,
   "captureTitles": false,

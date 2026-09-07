@@ -24,6 +24,7 @@ type Match struct {
 	Class        string `json:"class,omitempty"`
 	InitialClass string `json:"initialClass,omitempty"`
 	Title        string `json:"title,omitempty"`
+	Disabled     bool   `json:"disabled,omitempty"`
 }
 
 type Application struct {
@@ -33,6 +34,7 @@ type Application struct {
 }
 
 type Config struct {
+	AutoCapture         bool          `json:"autoCapture"`
 	AutoRestore         bool          `json:"autoRestore"`
 	CaptureUnconfigured bool          `json:"captureUnconfigured"`
 	CaptureTitles       bool          `json:"captureTitles"`
@@ -98,14 +100,16 @@ type RestoreResult struct {
 }
 
 type Status struct {
-	Saved         bool      `json:"saved"`
-	SavedAt       time.Time `json:"savedAt,omitempty"`
-	Windows       int       `json:"windows"`
-	Managed       int       `json:"managed"`
-	Workspaces    int       `json:"workspaces"`
-	AutoRestore   bool      `json:"autoRestore"`
-	DaemonRunning bool      `json:"daemonRunning"`
-	StatePath     string    `json:"statePath"`
+	AutoCapture     bool      `json:"autoCapture"`
+	CaptureInterval int       `json:"captureIntervalSeconds"`
+	Saved           bool      `json:"saved"`
+	SavedAt         time.Time `json:"savedAt,omitempty"`
+	Windows         int       `json:"windows"`
+	Managed         int       `json:"managed"`
+	Workspaces      int       `json:"workspaces"`
+	AutoRestore     bool      `json:"autoRestore"`
+	DaemonRunning   bool      `json:"daemonRunning"`
+	StatePath       string    `json:"statePath"`
 }
 
 type Compositor interface {
@@ -121,6 +125,7 @@ type Manager struct {
 
 func DefaultConfig() Config {
 	return Config{
+		AutoCapture:         true,
 		CaptureUnconfigured: true,
 		DebounceMS:          750,
 		CaptureInterval:     15,
@@ -165,25 +170,32 @@ func (m *Manager) LoadConfig() (Config, error) {
 	if cfg.RestoreTimeout < 1 {
 		cfg.RestoreTimeout = 20
 	}
+	if err := validateConfig(cfg); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func validateConfig(cfg Config) error {
 	ids := map[string]bool{}
 	for _, app := range cfg.Applications {
 		if app.ID == "" || len(app.Command) == 0 || strings.TrimSpace(app.Command[0]) == "" {
-			return Config{}, errors.New("every application requires an id and command")
+			return errors.New("every application requires an id and command")
 		}
 		if ids[app.ID] {
-			return Config{}, fmt.Errorf("duplicate application id %q", app.ID)
+			return fmt.Errorf("duplicate application id %q", app.ID)
 		}
 		ids[app.ID] = true
 		if err := validateMatch(app.Match); err != nil {
-			return Config{}, fmt.Errorf("application %q: %w", app.ID, err)
+			return fmt.Errorf("application %q: %w", app.ID, err)
 		}
 	}
 	for _, match := range cfg.Exclude {
 		if err := validateMatch(match); err != nil {
-			return Config{}, fmt.Errorf("exclude: %w", err)
+			return fmt.Errorf("exclude: %w", err)
 		}
 	}
-	return cfg, nil
+	return nil
 }
 
 func (m *Manager) SaveConfig(cfg Config) error {
@@ -337,7 +349,7 @@ func (m *Manager) Status() (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	status := Status{AutoRestore: cfg.AutoRestore, StatePath: m.StatePath}
+	status := Status{AutoRestore: cfg.AutoRestore, AutoCapture: cfg.AutoCapture, CaptureInterval: cfg.CaptureInterval, StatePath: m.StatePath}
 	status.DaemonRunning, err = m.DaemonRunning()
 	if err != nil {
 		return Status{}, err
@@ -380,8 +392,7 @@ func (m *Manager) Restore(ctx context.Context, dryRun, noLaunch bool) (result Re
 	// Apply today's exclusions to historical snapshots as well as live windows.
 	eligible := snapshot.Windows[:0]
 	for _, saved := range snapshot.Windows {
-		window := hyprland.Window{Class: saved.Class, InitialClass: saved.InitialClass, Title: saved.Title}
-		if specialWorkspace(saved.Workspace) || excluded(window, cfg.Exclude) || (saved.Application == "" && !cfg.CaptureUnconfigured) {
+		if specialWorkspace(saved.Workspace) || excludedSaved(saved, cfg.Exclude) || (saved.Application == "" && !cfg.CaptureUnconfigured) {
 			continue
 		}
 		eligible = append(eligible, saved)
@@ -424,6 +435,10 @@ func (m *Manager) Restore(ctx context.Context, dryRun, noLaunch bool) (result Re
 			}
 			app, ok := configuredApplication(saved.Application, cfg.Applications)
 			if !ok {
+				continue
+			}
+			if excludedLiveMatch(saved, desktop.Windows, cfg) {
+				result.Operations = append(result.Operations, Operation{Kind: "skip-launch", Slot: saved.Slot, Application: app.ID, Detail: "a matching open window is excluded"})
 				continue
 			}
 			result.Operations = append(result.Operations, Operation{Kind: "launch", Application: app.ID, Detail: strings.Join(app.Command, " ")})
@@ -817,7 +832,7 @@ func excluded(window hyprland.Window, exclusions []Match) bool {
 		}
 	}
 	for _, exclusion := range exclusions {
-		if matches(exclusion, window) {
+		if !exclusion.Disabled && matches(exclusion, window) {
 			return true
 		}
 	}

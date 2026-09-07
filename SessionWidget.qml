@@ -10,6 +10,7 @@ PluginComponent {
     pluginId: "dankSession"
 
     property bool autoRestore: false
+    property bool autoCapture: true
     property bool captureUnconfigured: true
     property bool captureTitles: false
     property int captureInterval: 15
@@ -23,6 +24,9 @@ PluginComponent {
     readonly property bool hasError: statusError || actionError || configureError
     property string _statusOutput: ""
     property string _actionOutput: ""
+    property string _actionCommand: ""
+    property bool _actionDryRun: false
+    property string savedAge: ""
     property string _configureSignature: ""
     property bool _settingsReady: false
     readonly property bool actionBusy: actionProcess.running || restoreStart.running
@@ -39,7 +43,7 @@ PluginComponent {
         onLoaded: {
             try {
                 var saved = JSON.parse(text())[root.pluginId] || {}
-                var keys = ["autoRestore", "captureUnconfigured", "captureTitles", "captureInterval", "restoreTimeout"]
+                var keys = ["autoCapture", "autoRestore", "captureUnconfigured", "captureTitles", "captureInterval", "restoreTimeout"]
                 for (var key of keys) {
                     if (saved[key] !== undefined && root.pluginService
                             && root.pluginService.loadPluginData(root.pluginId, key, undefined) !== saved[key]) {
@@ -57,6 +61,7 @@ PluginComponent {
     function loadSettings() {
         if (!_settingsReady) return
         if (!pluginService || !pluginService.loadPluginData) return
+        autoCapture = pluginService.loadPluginData(pluginId, "autoCapture", true) !== false
         autoRestore = pluginService.loadPluginData(pluginId, "autoRestore", false) === true
         captureUnconfigured = pluginService.loadPluginData(pluginId, "captureUnconfigured", true) !== false
         captureTitles = pluginService.loadPluginData(pluginId, "captureTitles", false) === true
@@ -66,11 +71,12 @@ PluginComponent {
     }
 
     function syncConfiguration() {
-        var signature = [autoRestore, captureUnconfigured, captureTitles, captureInterval, restoreTimeout].join("|")
+        var signature = [autoCapture, autoRestore, captureUnconfigured, captureTitles, captureInterval, restoreTimeout].join("|")
         if (signature === _configureSignature || configureProcess.running) return
         _configureSignature = signature
         configureProcess.command = [
             "danksession", "configure",
+            "--auto-capture=" + autoCapture,
             "--auto-restore=" + autoRestore,
             "--capture-unconfigured=" + captureUnconfigured,
             "--capture-titles=" + captureTitles,
@@ -89,6 +95,8 @@ PluginComponent {
     function runAction(command, dryRun) {
         if (actionBusy) return
         _actionOutput = ""
+        _actionCommand = command
+        _actionDryRun = dryRun === true
         actionError = false
         actionProcess.command = dryRun ? ["danksession", command, "--dry-run"] : ["danksession", command]
         if (command === "restore" && !dryRun) {
@@ -99,6 +107,14 @@ PluginComponent {
             return
         }
         actionProcess.running = true
+    }
+
+    function updateSavedAge() {
+        if (!sessionStatus.savedAt) { savedAge = ""; return }
+        var seconds = Math.max(0, Math.floor((Date.now() - new Date(sessionStatus.savedAt).getTime()) / 1000))
+        savedAge = seconds < 60 ? "Saved " + seconds + " seconds ago"
+            : (seconds < 3600 ? "Saved " + Math.floor(seconds / 60) + " minutes ago"
+                : "Saved " + new Date(sessionStatus.savedAt).toLocaleString())
     }
 
     Timer {
@@ -119,6 +135,7 @@ PluginComponent {
         onTriggered: {
             root.loadSettings()
             root.refreshStatus()
+            root.updateSavedAge()
         }
     }
 
@@ -142,6 +159,7 @@ PluginComponent {
                 var parsed = JSON.parse(root._statusOutput.trim())
                 if (parsed.error) throw new Error(parsed.error)
                 root.sessionStatus = parsed
+                root.updateSavedAge()
                 root.statusText = parsed.saved
                     ? (parsed.windows + " windows across " + parsed.workspaces + " workspaces")
                     : "No snapshot"
@@ -157,9 +175,26 @@ PluginComponent {
         id: actionProcess
         running: false
         stdout: SplitParser { onRead: data => { root._actionOutput += data + "\n" } }
+        stderr: StdioCollector { id: actionStderr }
         onExited: (exitCode, exitStatus) => {
-            root.actionOutput = root._actionOutput.trim()
-            root.actionError = exitCode !== 0
+            try {
+                var result = JSON.parse(root._actionOutput.trim())
+                if (result.error) throw new Error(result.error)
+                if (exitCode !== 0) throw new Error("The operation did not complete.")
+                root.actionError = false
+                if (root._actionCommand === "capture") {
+                    root.actionOutput = "Saved " + result.windows + " windows."
+                } else {
+                    root.actionOutput = (root._actionDryRun ? "Preview: " : "Restore finished: ")
+                        + result.matched + " windows matched, " + result.missing + " unavailable."
+                    if (result.launched) root.actionOutput += " Reopened " + result.launched + " applications."
+                    if (root._actionDryRun) root.actionOutput += " Nothing has been changed."
+                }
+            } catch (error) {
+                root.actionError = true
+                root.actionOutput = error.message || "The operation failed. Check that the backend is available."
+                if (!root._actionOutput.trim() && actionStderr.text.trim()) root.actionOutput = actionStderr.text.trim()
+            }
             root.refreshStatus()
         }
     }
@@ -233,8 +268,7 @@ PluginComponent {
                 StyledText {
                     width: parent.width
                     visible: root.sessionStatus.saved
-                    text: root.sessionStatus.managed + " launch-managed · "
-                        + (root.sessionStatus.savedAt ? new Date(root.sessionStatus.savedAt).toLocaleString() : "")
+                    text: root.sessionStatus.managed + " windows with launch rules · " + root.savedAge
                     font.pixelSize: Theme.fontSizeSmall
                     color: Theme.surfaceVariantText
                     wrapMode: Text.WordWrap
@@ -297,7 +331,6 @@ PluginComponent {
                     width: parent.width
                     visible: root.actionOutput !== ""
                     text: root.actionOutput
-                    font.family: "monospace"
                     font.pixelSize: Theme.fontSizeSmall
                     color: root.hasError ? Theme.error : Theme.surfaceVariantText
                     wrapMode: Text.WrapAnywhere
@@ -309,9 +342,9 @@ PluginComponent {
                     width: parent.width
                     text: !root.sessionStatus.daemonRunning
                         ? "Capture daemon is stopped. Saving and restoring are manual; login restoration also requires daemon startup to be enabled in your system configuration."
-                        : (root.autoRestore
-                            ? "Capture daemon is running. Automatic restoration is enabled for the next graphical login."
-                            : "Capture daemon is running. Automatic restoration is disabled.")
+                        : ((!root.autoCapture ? "Automatic saving is paused. "
+                            : "Saving changes automatically, with a safety save every " + root.captureInterval + " seconds. ")
+                            + (root.autoRestore ? "Restore after login is enabled." : "Restore after login is disabled."))
                     font.pixelSize: Theme.fontSizeSmall
                     color: Theme.surfaceVariantText
                     wrapMode: Text.WordWrap
