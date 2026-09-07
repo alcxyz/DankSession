@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1 — QA
+
+- Load the new popout by URL so existing DMS sessions can pick it up without a
+  shell restart, even when the old plugin directory contents were cached.
+
 ## 0.3.0 — QA
 
 - List saved application windows, workspaces, dimensions, and current restore

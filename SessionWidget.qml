@@ -210,18 +210,27 @@ PluginComponent {
     }
 
     popoutContent: Component {
-        SessionPopout {
-            sessionStatus: root.sessionStatus
-            savedAge: root.savedAge
-            autoCapture: root.autoCapture
-            autoRestore: root.autoRestore
-            captureInterval: root.captureInterval
-            statusError: root.statusError
-            configureError: root.configureError
-            actionError: root.actionError
-            actionOutput: root.actionOutput
-            busy: root.actionBusy
-            onActionRequested: (command, dryRun) => root.runAction(command, dryRun)
+        Loader {
+            id: popoutLoader
+            implicitHeight: item ? item.implicitHeight : 0
+            // An explicit URL also works when DMS cached the plugin directory
+            // before this component was added, without restarting the shell.
+            Component.onCompleted: setSource(Qt.resolvedUrl("SessionPopout.qml"), {
+                sessionStatus: Qt.binding(() => root.sessionStatus),
+                savedAge: Qt.binding(() => root.savedAge),
+                autoCapture: Qt.binding(() => root.autoCapture),
+                autoRestore: Qt.binding(() => root.autoRestore),
+                captureInterval: Qt.binding(() => root.captureInterval),
+                statusError: Qt.binding(() => root.statusError),
+                configureError: Qt.binding(() => root.configureError),
+                actionError: Qt.binding(() => root.actionError),
+                actionOutput: Qt.binding(() => root.actionOutput),
+                busy: Qt.binding(() => root.actionBusy)
+            })
+            Connections {
+                target: popoutLoader.item
+                function onActionRequested(command, dryRun) { root.runAction(command, dryRun) }
+            }
         }
     }
 
