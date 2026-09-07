@@ -46,10 +46,12 @@ func run(args []string) error {
 		configPath = value
 	}
 	manager := &session.Manager{Compositor: hyprland.NewClient(), StatePath: statePath, ConfigPath: configPath}
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
 
 	switch args[0] {
 	case "capture", "save":
-		snapshot, err := manager.Capture(context.Background())
+		snapshot, err := manager.Capture(ctx)
 		if err != nil {
 			return err
 		}
@@ -69,7 +71,7 @@ func run(args []string) error {
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
-		result, err := manager.Restore(context.Background(), *dryRun, *noLaunch)
+		result, err := manager.Restore(ctx, *dryRun, *noLaunch)
 		if err != nil {
 			return err
 		}
@@ -111,15 +113,32 @@ func run(args []string) error {
 func runDaemon(manager *session.Manager) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	unlock, err := manager.LockDaemon()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	client, ok := manager.Compositor.(*hyprland.Client)
+	if !ok {
+		return errors.New("daemon requires the Hyprland compositor client")
+	}
+	instance, err := client.Instance(ctx)
+	if err != nil {
+		return err
+	}
 
 	cfg, err := manager.LoadConfig()
 	if err != nil {
 		return err
 	}
-	if cfg.AutoRestore {
+	firstStart, err := manager.PrepareSession(instance)
+	if err != nil {
+		return err
+	}
+	if firstStart && cfg.AutoRestore {
 		result, restoreErr := manager.Restore(ctx, false, false)
 		if restoreErr != nil && !errors.Is(restoreErr, os.ErrNotExist) {
-			writeJSON(map[string]any{"event": "restore-error", "error": restoreErr.Error()})
+			return fmt.Errorf("automatic restoration failed (incoming snapshot retained): %w", restoreErr)
 		} else if restoreErr == nil {
 			writeJSON(map[string]any{"event": "restored", "matched": result.Matched, "missing": result.Missing, "launched": result.Launched})
 		}
@@ -128,15 +147,20 @@ func runDaemon(manager *session.Manager) error {
 		return err
 	}
 
-	client, ok := manager.Compositor.(*hyprland.Client)
-	if !ok {
-		return errors.New("daemon requires the Hyprland compositor client")
-	}
 	events, eventErrors := client.Events(ctx)
+	return captureLoop(ctx, manager, cfg, events, eventErrors)
+}
+
+func captureLoop(ctx context.Context, manager *session.Manager, cfg session.Config, events <-chan string, eventErrors <-chan error) error {
 	interval := time.NewTicker(time.Duration(cfg.CaptureInterval) * time.Second)
 	defer interval.Stop()
 	var debounce *time.Timer
 	var debounceC <-chan time.Time
+	defer func() {
+		if debounce != nil {
+			debounce.Stop()
+		}
+	}()
 
 	schedule := func() {
 		if debounce != nil {
@@ -146,7 +170,13 @@ func runDaemon(manager *session.Manager) error {
 		debounceC = debounce.C
 	}
 	capture := func() {
-		if _, err := manager.Capture(context.Background()); err != nil {
+		if updated, err := manager.LoadConfig(); err == nil {
+			if updated.CaptureInterval != cfg.CaptureInterval {
+				interval.Reset(time.Duration(updated.CaptureInterval) * time.Second)
+			}
+			cfg = updated
+		}
+		if _, err := manager.Capture(ctx); err != nil && !errors.Is(err, session.ErrBusy) && !errors.Is(err, context.Canceled) {
 			writeJSON(map[string]any{"event": "capture-error", "error": err.Error()})
 		}
 	}
@@ -154,12 +184,12 @@ func runDaemon(manager *session.Manager) error {
 	for {
 		select {
 		case <-ctx.Done():
-			capture()
+			// Shutdown is already dismantling the desktop. Retain the last
+			// completed snapshot instead of saving closed windows over it.
 			return nil
 		case event, open := <-events:
 			if !open {
-				events = nil
-				continue
+				return nil
 			}
 			if captureEvent(event) {
 				schedule()

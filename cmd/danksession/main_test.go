@@ -1,6 +1,28 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"github.com/alcxyz/DankSession/internal/session"
+	"testing"
+)
+
+func TestCaptureLoopDoesNotCaptureDuringShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	// A capture would dereference the nil compositor: no shutdown snapshot
+	// may replace the last completed desktop snapshot.
+	if err := captureLoop(ctx, &session.Manager{}, session.DefaultConfig(), make(chan string), make(chan error)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCaptureLoopStopsWhenCompositorDisconnects(t *testing.T) {
+	events := make(chan string)
+	close(events)
+	if err := captureLoop(context.Background(), &session.Manager{}, session.DefaultConfig(), events, make(chan error)); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestCaptureEventIncludesPlacementAndFocusChanges(t *testing.T) {
 	for _, event := range []string{

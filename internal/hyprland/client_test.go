@@ -1,6 +1,11 @@
 package hyprland
 
-import "testing"
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestDispatchExpressionUsesHyprlandLuaAPI(t *testing.T) {
 	tests := []struct {
@@ -13,6 +18,8 @@ func TestDispatchExpressionUsesHyprlandLuaAPI(t *testing.T) {
 		{"movetoworkspacesilent", "5,address:0xabc", `hl.dsp.window.move({ workspace = 5, window = "address:0xabc", follow = false })`},
 		{"movetoworkspacesilent", "special:danksession-staging,address:0xabc", `hl.dsp.window.move({ workspace = "special:danksession-staging", window = "address:0xabc", follow = false })`},
 		{"moveworkspacetomonitor", "5 DP-1", `hl.dsp.workspace.move({ workspace = 5, monitor = "DP-1" })`},
+		{"moveworkspacetomonitor", "name:my work DP-1", `hl.dsp.workspace.move({ workspace = "name:my work", monitor = "DP-1" })`},
+		{"movetoworkspacesilent", "name:work, mail,address:0xabc", `hl.dsp.window.move({ workspace = "name:work, mail", window = "address:0xabc", follow = false })`},
 		{"setfloating", "address:0xabc", `hl.dsp.window.float({ action = "set", window = "address:0xabc" })`},
 		{"settiled", "address:0xabc", `hl.dsp.window.float({ action = "unset", window = "address:0xabc" })`},
 		{"resizewindowpixel", "exact 1200 800,address:0xabc", `hl.dsp.window.resize({ x = 1200, y = 800, relative = false, window = "address:0xabc" })`},
@@ -31,6 +38,34 @@ func TestDispatchExpressionUsesHyprlandLuaAPI(t *testing.T) {
 				t.Fatalf("got %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestInstanceRespectsExplicitSession(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", dir)
+	t.Setenv("HYPRLAND_INSTANCE_SIGNATURE", "chosen")
+	client := &Client{Hyprctl: "/must-not-query-other-instances"}
+	if _, err := client.Instance(context.Background()); err == nil {
+		t.Fatal("accepted missing explicit session")
+	}
+	path := filepath.Join(dir, "hypr", "chosen", ".socket.sock")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	instance, err := client.Instance(context.Background())
+	if err != nil || instance != "chosen" {
+		t.Fatalf("instance=%q err=%v", instance, err)
+	}
+}
+
+func TestLogicalWidthAccountsForRotationAndScale(t *testing.T) {
+	monitor := Monitor{Width: 3840, Height: 2160, Scale: 2, Transform: 1}
+	if got := monitor.LogicalWidth(); got != 1080 {
+		t.Fatalf("got %d", got)
 	}
 }
 

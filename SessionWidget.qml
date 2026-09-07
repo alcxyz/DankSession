@@ -17,7 +17,10 @@ PluginComponent {
     property var sessionStatus: ({saved: false, windows: 0, managed: 0, workspaces: 0})
     property string statusText: "No snapshot"
     property string actionOutput: ""
-    property bool hasError: false
+    property bool statusError: false
+    property bool actionError: false
+    property bool configureError: false
+    readonly property bool hasError: statusError || actionError || configureError
     property string _statusOutput: ""
     property string _actionOutput: ""
     property string _configureSignature: ""
@@ -53,11 +56,11 @@ PluginComponent {
         statusProcess.running = true
     }
 
-    function runAction(command) {
+    function runAction(command, dryRun) {
         if (actionProcess.running) return
         _actionOutput = ""
-        hasError = false
-        actionProcess.command = ["danksession", command]
+        actionError = false
+        actionProcess.command = dryRun ? ["danksession", command, "--dry-run"] : ["danksession", command]
         actionProcess.running = true
     }
 
@@ -81,6 +84,7 @@ PluginComponent {
         running: false
         stdout: StdioCollector {}
         onExited: (exitCode, exitStatus) => {
+            root.configureError = exitCode !== 0
             if (exitCode !== 0) root._configureSignature = ""
         }
     }
@@ -98,10 +102,10 @@ PluginComponent {
                 root.statusText = parsed.saved
                     ? (parsed.windows + " windows across " + parsed.workspaces + " workspaces")
                     : "No snapshot"
-                root.hasError = false
+                root.statusError = false
             } catch (error) {
                 root.statusText = "Backend unavailable"
-                root.hasError = true
+                root.statusError = true
             }
         }
     }
@@ -112,7 +116,7 @@ PluginComponent {
         stdout: SplitParser { onRead: data => { root._actionOutput += data + "\n" } }
         onExited: (exitCode, exitStatus) => {
             root.actionOutput = root._actionOutput.trim()
-            root.hasError = exitCode !== 0
+            root.actionError = exitCode !== 0
             root.refreshStatus()
         }
     }
@@ -197,7 +201,7 @@ PluginComponent {
                     spacing: Theme.spacingM
 
                     Rectangle {
-                        width: 120
+                        width: 96
                         height: 36
                         radius: Theme.cornerRadius
                         color: saveMouse.containsMouse ? Theme.withAlpha(Theme.primary, 0.3) : Theme.primary
@@ -214,7 +218,7 @@ PluginComponent {
                     }
 
                     Rectangle {
-                        width: 120
+                        width: 96
                         height: 36
                         radius: Theme.cornerRadius
                         color: restoreMouse.containsMouse ? Theme.withAlpha(Theme.primary, 0.25) : Theme.surfaceContainerHigh
@@ -227,6 +231,21 @@ PluginComponent {
                             cursorShape: Qt.PointingHandCursor
                             enabled: !actionProcess.running && root.sessionStatus.saved
                             onClicked: root.runAction("restore")
+                        }
+                    }
+
+                    Rectangle {
+                        width: 96
+                        height: 36
+                        radius: Theme.cornerRadius
+                        color: Theme.surfaceContainerHigh
+                        opacity: actionProcess.running || !root.sessionStatus.saved ? 0.5 : 1
+                        StyledText { text: "Preview"; color: Theme.surfaceText; anchors.centerIn: parent }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            enabled: !actionProcess.running && root.sessionStatus.saved
+                            onClicked: root.runAction("restore", true)
                         }
                     }
                 }
@@ -245,9 +264,11 @@ PluginComponent {
 
                 StyledText {
                     width: parent.width
-                    text: root.autoRestore
-                        ? "Automatic restoration is enabled for the next graphical login."
-                        : "Automatic restoration is disabled. Enable it in plugin settings after validating your application rules."
+                    text: !root.sessionStatus.daemonRunning
+                        ? "Capture daemon is stopped. Saving and restoring are manual; login restoration also requires daemon startup to be enabled in your system configuration."
+                        : (root.autoRestore
+                            ? "Capture daemon is running. Automatic restoration is enabled for the next graphical login."
+                            : "Capture daemon is running. Automatic restoration is disabled.")
                     font.pixelSize: Theme.fontSizeSmall
                     color: Theme.surfaceVariantText
                     wrapMode: Text.WordWrap
@@ -257,5 +278,5 @@ PluginComponent {
     }
 
     popoutWidth: 360
-    popoutHeight: 300
+    popoutHeight: 440
 }

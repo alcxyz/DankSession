@@ -54,14 +54,33 @@ type Monitor struct {
 	Width           int          `json:"width"`
 	Height          int          `json:"height"`
 	Scale           float64      `json:"scale"`
+	Transform       int          `json:"transform"`
 	Focused         bool         `json:"focused"`
 	ActiveWorkspace WorkspaceRef `json:"activeWorkspace"`
+}
+
+func (m Monitor) LogicalWidth() int {
+	width := m.Width
+	if m.Transform%2 != 0 {
+		width = m.Height
+	}
+	scale := m.Scale
+	if scale <= 0 {
+		scale = 1
+	}
+	return max(1, int(float64(width)/scale))
 }
 
 type Desktop struct {
 	Windows      []Window
 	Monitors     []Monitor
+	Workspaces   []Workspace
 	ActiveWindow Window
+}
+
+type Workspace struct {
+	ID          int    `json:"id"`
+	TiledLayout string `json:"tiledLayout"`
 }
 
 type Client struct {
@@ -73,6 +92,10 @@ type Client struct {
 
 func NewClient() *Client {
 	return &Client{Hyprctl: "hyprctl"}
+}
+
+func (c *Client) Instance(ctx context.Context) (string, error) {
+	return c.liveInstance(ctx)
 }
 
 func (c *Client) query(ctx context.Context, command string, target any) error {
@@ -96,6 +119,9 @@ func (c *Client) Desktop(ctx context.Context) (Desktop, error) {
 		return Desktop{}, err
 	}
 	if err := c.query(ctx, "monitors", &desktop.Monitors); err != nil {
+		return Desktop{}, err
+	}
+	if err := c.query(ctx, "workspaces", &desktop.Workspaces); err != nil {
 		return Desktop{}, err
 	}
 	if err := c.query(ctx, "activewindow", &desktop.ActiveWindow); err != nil {
@@ -149,16 +175,18 @@ func dispatchExpression(dispatcher, argument string) (string, error) {
 		}
 		return fmt.Sprintf("hl.dsp.focus({ workspace = %s })", workspace(argument)), nil
 	case "movetoworkspacesilent":
-		target, selector, ok := strings.Cut(argument, ",")
-		if !ok || target == "" || selector == "" {
+		separator := strings.LastIndex(argument, ",address:")
+		if separator <= 0 {
 			return "", fmt.Errorf("invalid window workspace move %q", argument)
 		}
+		target, selector := argument[:separator], argument[separator+1:]
 		return fmt.Sprintf("hl.dsp.window.move({ workspace = %s, window = %s, follow = false })", workspace(target), window(selector)), nil
 	case "moveworkspacetomonitor":
-		target, monitor, ok := strings.Cut(argument, " ")
-		if !ok || target == "" || monitor == "" {
+		separator := strings.LastIndex(argument, " ")
+		if separator <= 0 || separator == len(argument)-1 {
 			return "", fmt.Errorf("invalid workspace monitor move %q", argument)
 		}
+		target, monitor := argument[:separator], argument[separator+1:]
 		return fmt.Sprintf("hl.dsp.workspace.move({ workspace = %s, monitor = %s })", workspace(target), strconv.Quote(monitor)), nil
 	case "setfloating", "settiled":
 		action := "set"
@@ -240,10 +268,15 @@ func (c *Client) Events(ctx context.Context) (<-chan string, <-chan error) {
 			return
 		}
 		defer conn.Close()
+		done := make(chan struct{})
+		defer close(done)
 
 		go func() {
-			<-ctx.Done()
-			_ = conn.Close()
+			select {
+			case <-ctx.Done():
+				_ = conn.Close()
+			case <-done:
+			}
 		}()
 
 		scanner := bufio.NewScanner(conn)
@@ -274,6 +307,15 @@ func (c *Client) liveInstance(ctx context.Context) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.instance != "" && controlSocketExists(c.instance) {
+		return c.instance, nil
+	}
+	// Respect the caller's session; never choose a nested compositor merely
+	// because it was started more recently.
+	if requested := os.Getenv("HYPRLAND_INSTANCE_SIGNATURE"); requested != "" {
+		if !controlSocketExists(requested) {
+			return "", errors.New("the requested Hyprland instance is not available")
+		}
+		c.instance = requested
 		return c.instance, nil
 	}
 

@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/alcxyz/DankSession/internal/hyprland"
@@ -99,13 +98,14 @@ type RestoreResult struct {
 }
 
 type Status struct {
-	Saved       bool      `json:"saved"`
-	SavedAt     time.Time `json:"savedAt,omitempty"`
-	Windows     int       `json:"windows"`
-	Managed     int       `json:"managed"`
-	Workspaces  int       `json:"workspaces"`
-	AutoRestore bool      `json:"autoRestore"`
-	StatePath   string    `json:"statePath"`
+	Saved         bool      `json:"saved"`
+	SavedAt       time.Time `json:"savedAt,omitempty"`
+	Windows       int       `json:"windows"`
+	Managed       int       `json:"managed"`
+	Workspaces    int       `json:"workspaces"`
+	AutoRestore   bool      `json:"autoRestore"`
+	DaemonRunning bool      `json:"daemonRunning"`
+	StatePath     string    `json:"statePath"`
 }
 
 type Compositor interface {
@@ -165,10 +165,15 @@ func (m *Manager) LoadConfig() (Config, error) {
 	if cfg.RestoreTimeout < 1 {
 		cfg.RestoreTimeout = 20
 	}
+	ids := map[string]bool{}
 	for _, app := range cfg.Applications {
-		if app.ID == "" || len(app.Command) == 0 {
+		if app.ID == "" || len(app.Command) == 0 || strings.TrimSpace(app.Command[0]) == "" {
 			return Config{}, errors.New("every application requires an id and command")
 		}
+		if ids[app.ID] {
+			return Config{}, fmt.Errorf("duplicate application id %q", app.ID)
+		}
+		ids[app.ID] = true
 		if err := validateMatch(app.Match); err != nil {
 			return Config{}, fmt.Errorf("application %q: %w", app.ID, err)
 		}
@@ -186,6 +191,11 @@ func (m *Manager) SaveConfig(cfg Config) error {
 }
 
 func (m *Manager) Capture(ctx context.Context) (Snapshot, error) {
+	unlock, err := m.LockOperation()
+	if err != nil {
+		return Snapshot{}, err
+	}
+	defer unlock()
 	cfg, err := m.LoadConfig()
 	if err != nil {
 		return Snapshot{}, err
@@ -193,6 +203,12 @@ func (m *Manager) Capture(ctx context.Context) (Snapshot, error) {
 	desktop, err := m.Compositor.Desktop(ctx)
 	if err != nil {
 		return Snapshot{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return Snapshot{}, err
+	}
+	if len(desktop.Monitors) == 0 {
+		return Snapshot{}, errors.New("refusing to capture a desktop without active outputs")
 	}
 	snapshot := BuildSnapshot(desktop, cfg, time.Now().UTC())
 	if err := writeJSONAtomic(m.StatePath, snapshot); err != nil {
@@ -202,6 +218,10 @@ func (m *Manager) Capture(ctx context.Context) (Snapshot, error) {
 }
 
 func BuildSnapshot(desktop hyprland.Desktop, cfg Config, now time.Time) Snapshot {
+	layouts := map[int]string{}
+	for _, workspace := range desktop.Workspaces {
+		layouts[workspace.ID] = workspace.TiledLayout
+	}
 	monitorByID := make(map[int]hyprland.Monitor, len(desktop.Monitors))
 	snapshot := Snapshot{Schema: SchemaVersion, SavedAt: now}
 	for _, monitor := range desktop.Monitors {
@@ -215,7 +235,7 @@ func BuildSnapshot(desktop hyprland.Desktop, cfg Config, now time.Time) Snapshot
 	}
 	byWorkspace := map[int][]candidate{}
 	for _, window := range desktop.Windows {
-		if !window.Mapped || window.Hidden || window.Workspace.ID < 0 || excluded(window, cfg.Exclude) {
+		if !window.Mapped || window.Hidden || specialWorkspace(window.Workspace) || excluded(window, cfg.Exclude) {
 			continue
 		}
 		app := applicationFor(window, cfg.Applications)
@@ -275,7 +295,7 @@ func BuildSnapshot(desktop hyprland.Desktop, cfg Config, now time.Time) Snapshot
 			if ok {
 				saved.Monitor = monitor.Name
 			}
-			if !window.Floating && ok {
+			if !window.Floating && ok && layouts[window.Workspace.ID] == "scrolling" {
 				if columnX == math.MinInt || abs(window.At[0]-columnX) > 16 {
 					column++
 					columnX = window.At[0]
@@ -283,8 +303,9 @@ func BuildSnapshot(desktop hyprland.Desktop, cfg Config, now time.Time) Snapshot
 				} else {
 					row++
 				}
-				width := snapWidth(float64(window.Size[0]+8) / float64(max(1, monitor.Width)))
-				centered := abs((window.At[0]+window.Size[0]/2)-(monitor.X+monitor.Width/2)) <= 16
+				logicalWidth := monitor.LogicalWidth()
+				width := snapWidth(float64(window.Size[0]+8) / float64(logicalWidth))
+				centered := abs((window.At[0]+window.Size[0]/2)-(monitor.X+logicalWidth/2)) <= 16
 				saved.Layout = &Layout{Name: "scrolling", Column: column, Row: row, ColumnWidth: width, Centered: centered}
 			}
 			snapshot.Windows = append(snapshot.Windows, saved)
@@ -314,6 +335,10 @@ func (m *Manager) Status() (Status, error) {
 		return Status{}, err
 	}
 	status := Status{AutoRestore: cfg.AutoRestore, StatePath: m.StatePath}
+	status.DaemonRunning, err = m.DaemonRunning()
+	if err != nil {
+		return Status{}, err
+	}
 	snapshot, err := m.LoadSnapshot()
 	if errors.Is(err, os.ErrNotExist) {
 		return status, nil
@@ -335,7 +360,12 @@ func (m *Manager) Status() (Status, error) {
 	return status, nil
 }
 
-func (m *Manager) Restore(ctx context.Context, dryRun, noLaunch bool) (RestoreResult, error) {
+func (m *Manager) Restore(ctx context.Context, dryRun, noLaunch bool) (result RestoreResult, restoreErr error) {
+	unlock, err := m.LockOperation()
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	defer unlock()
 	snapshot, err := m.LoadSnapshot()
 	if err != nil {
 		return RestoreResult{}, err
@@ -344,12 +374,41 @@ func (m *Manager) Restore(ctx context.Context, dryRun, noLaunch bool) (RestoreRe
 	if err != nil {
 		return RestoreResult{}, err
 	}
+	// Apply today's exclusions to historical snapshots as well as live windows.
+	eligible := snapshot.Windows[:0]
+	for _, saved := range snapshot.Windows {
+		window := hyprland.Window{Class: saved.Class, InitialClass: saved.InitialClass, Title: saved.Title}
+		if specialWorkspace(saved.Workspace) || excluded(window, cfg.Exclude) || (saved.Application == "" && !cfg.CaptureUnconfigured) {
+			continue
+		}
+		eligible = append(eligible, saved)
+	}
+	snapshot.Windows = eligible
 	desktop, err := m.Compositor.Desktop(ctx)
 	if err != nil {
 		return RestoreResult{}, err
 	}
 
-	result := RestoreResult{DryRun: dryRun}
+	result = RestoreResult{DryRun: dryRun}
+	// Recover staged windows even if a later dispatch fails or is cancelled.
+	staged := map[string]Window{}
+	defer func() {
+		if dryRun || restoreErr == nil {
+			return
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		for address, saved := range staged {
+			if err := m.Compositor.Dispatch(cleanupCtx, "movetoworkspacesilent", workspaceSelector(saved.Workspace)+",address:"+address); err != nil {
+				restoreErr = errors.Join(restoreErr, fmt.Errorf("recover staged window %s: %w", saved.Slot, err))
+			}
+		}
+		if desktop.ActiveWindow.Address != "" {
+			if err := m.Compositor.Dispatch(cleanupCtx, "focuswindow", "address:"+desktop.ActiveWindow.Address); err != nil {
+				restoreErr = errors.Join(restoreErr, err)
+			}
+		}
+	}()
 	matches, missing := matchWindows(snapshot.Windows, desktop.Windows, cfg)
 	result.Matched = len(matches)
 	result.Missing = len(missing)
@@ -367,7 +426,7 @@ func (m *Manager) Restore(ctx context.Context, dryRun, noLaunch bool) (RestoreRe
 			result.Operations = append(result.Operations, Operation{Kind: "launch", Application: app.ID, Detail: strings.Join(app.Command, " ")})
 			launched[app.ID] = true
 			if !dryRun {
-				if err := launch(app.Command); err != nil {
+				if err := launch(ctx, app.Command); err != nil {
 					return result, fmt.Errorf("launch %s: %w", app.ID, err)
 				}
 				result.Launched++
@@ -378,7 +437,11 @@ func (m *Manager) Restore(ctx context.Context, dryRun, noLaunch bool) (RestoreRe
 	if !dryRun && len(launched) > 0 {
 		deadline := time.Now().Add(time.Duration(cfg.RestoreTimeout) * time.Second)
 		for time.Now().Before(deadline) {
-			time.Sleep(250 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				return result, ctx.Err()
+			case <-time.After(250 * time.Millisecond):
+			}
 			desktop, err = m.Compositor.Desktop(ctx)
 			if err != nil {
 				return result, err
@@ -401,7 +464,7 @@ func (m *Manager) Restore(ctx context.Context, dryRun, noLaunch bool) (RestoreRe
 			detail := fmt.Sprintf("workspace %d -> %d", current.Workspace.ID, saved.Workspace.ID)
 			result.Operations = append(result.Operations, Operation{Kind: "move-workspace", Slot: saved.Slot, Detail: detail})
 			if !dryRun {
-				arg := fmt.Sprintf("%d,address:%s", saved.Workspace.ID, current.Address)
+				arg := fmt.Sprintf("%s,address:%s", workspaceSelector(saved.Workspace), current.Address)
 				if err := m.Compositor.Dispatch(ctx, "movetoworkspacesilent", arg); err != nil {
 					return result, err
 				}
@@ -458,9 +521,15 @@ func (m *Manager) Restore(ctx context.Context, dryRun, noLaunch bool) (RestoreRe
 		}
 	}
 
+	availableMonitors := map[string]bool{}
+	for _, monitor := range desktop.Monitors {
+		availableMonitors[monitor.Name] = true
+	}
 	workspaceMonitor := map[int]string{}
+	workspaceRefs := map[int]hyprland.WorkspaceRef{}
 	for _, saved := range snapshot.Windows {
-		if saved.Workspace.ID > 0 && saved.Monitor != "" {
+		workspaceRefs[saved.Workspace.ID] = saved.Workspace
+		if _, matched := matches[saved.Slot]; matched && availableMonitors[saved.Monitor] {
 			workspaceMonitor[saved.Workspace.ID] = saved.Monitor
 		}
 	}
@@ -473,15 +542,26 @@ func (m *Manager) Restore(ctx context.Context, dryRun, noLaunch bool) (RestoreRe
 		monitor := workspaceMonitor[workspaceID]
 		result.Operations = append(result.Operations, Operation{Kind: "workspace-monitor", Detail: fmt.Sprintf("%d -> %s", workspaceID, monitor)})
 		if !dryRun {
-			if err := m.Compositor.Dispatch(ctx, "moveworkspacetomonitor", fmt.Sprintf("%d %s", workspaceID, monitor)); err != nil {
+			if err := m.Compositor.Dispatch(ctx, "moveworkspacetomonitor", fmt.Sprintf("%s %s", workspaceSelector(workspaceRefs[workspaceID]), monitor)); err != nil {
 				return result, err
 			}
 		}
 	}
 
+	layoutDesktop := desktop
+	if !dryRun {
+		layoutDesktop, err = m.Compositor.Desktop(ctx)
+		if err != nil {
+			return result, err
+		}
+	}
+	layouts := map[int]string{}
+	for _, workspace := range layoutDesktop.Workspaces {
+		layouts[workspace.ID] = workspace.TiledLayout
+	}
 	workspaceWindows := map[int][]Window{}
 	for _, saved := range snapshot.Windows {
-		if saved.Layout != nil && !saved.Floating {
+		if saved.Layout != nil && saved.Layout.Name == "scrolling" && !saved.Floating && layouts[saved.Workspace.ID] == "scrolling" {
 			workspaceWindows[saved.Workspace.ID] = append(workspaceWindows[saved.Workspace.ID], saved)
 		}
 	}
@@ -499,6 +579,22 @@ func (m *Manager) Restore(ctx context.Context, dryRun, noLaunch bool) (RestoreRe
 				break
 			}
 		}
+		// Rebuilding a workspace containing unsaved tiled windows also changes
+		// those windows' columns. Leave that topology alone.
+		for _, current := range layoutDesktop.Windows {
+			if current.Workspace.ID != workspaceID || !current.Mapped || current.Floating {
+				continue
+			}
+			known := false
+			for _, saved := range savedWindows {
+				if matched, ok := matches[saved.Slot]; ok && matched.Address == current.Address {
+					known = true
+				}
+			}
+			if !known {
+				complete = false
+			}
+		}
 		if !complete || !needsTopologyRestore(savedWindows) {
 			continue
 		}
@@ -512,6 +608,7 @@ func (m *Manager) Restore(ctx context.Context, dryRun, noLaunch bool) (RestoreRe
 			current := matches[saved.Slot]
 			result.Operations = append(result.Operations, Operation{Kind: "stage", Slot: saved.Slot, Detail: "special:danksession-staging"})
 			if !dryRun {
+				staged[current.Address] = saved
 				if err := m.Compositor.Dispatch(ctx, "movetoworkspacesilent", "special:danksession-staging,address:"+current.Address); err != nil {
 					return result, err
 				}
@@ -523,9 +620,10 @@ func (m *Manager) Restore(ctx context.Context, dryRun, noLaunch bool) (RestoreRe
 			if dryRun {
 				continue
 			}
-			if err := m.Compositor.Dispatch(ctx, "movetoworkspacesilent", fmt.Sprintf("%d,address:%s", workspaceID, current.Address)); err != nil {
+			if err := m.Compositor.Dispatch(ctx, "movetoworkspacesilent", fmt.Sprintf("%s,address:%s", workspaceSelector(saved.Workspace), current.Address)); err != nil {
 				return result, err
 			}
+			delete(staged, current.Address)
 			if saved.Layout.Row > 0 {
 				if err := m.Compositor.Dispatch(ctx, "focuswindow", "address:"+current.Address); err != nil {
 					return result, err
@@ -539,7 +637,7 @@ func (m *Manager) Restore(ctx context.Context, dryRun, noLaunch bool) (RestoreRe
 
 	for _, saved := range snapshot.Windows {
 		current, ok := matches[saved.Slot]
-		if !ok || saved.Layout == nil || saved.Floating {
+		if !ok || saved.Layout == nil || saved.Layout.Name != "scrolling" || saved.Floating || layouts[saved.Workspace.ID] != "scrolling" {
 			continue
 		}
 		result.Operations = append(result.Operations, Operation{Kind: "column-width", Slot: saved.Slot, Detail: strconv.FormatFloat(saved.Layout.ColumnWidth, 'f', 3, 64)})
@@ -559,7 +657,7 @@ func (m *Manager) Restore(ctx context.Context, dryRun, noLaunch bool) (RestoreRe
 	}
 
 	for _, monitor := range snapshot.Monitors {
-		if monitor.Name == "" || monitor.ActiveWorkspace.ID <= 0 {
+		if len(matches) == 0 || !availableMonitors[monitor.Name] || specialWorkspace(monitor.ActiveWorkspace) || monitor.ActiveWorkspace.ID == 0 {
 			continue
 		}
 		result.Operations = append(result.Operations, Operation{Kind: "active-workspace", Detail: fmt.Sprintf("%s -> %d", monitor.Name, monitor.ActiveWorkspace.ID)})
@@ -567,7 +665,7 @@ func (m *Manager) Restore(ctx context.Context, dryRun, noLaunch bool) (RestoreRe
 			if err := m.Compositor.Dispatch(ctx, "focusmonitor", monitor.Name); err != nil {
 				return result, err
 			}
-			if err := m.Compositor.Dispatch(ctx, "workspace", strconv.Itoa(monitor.ActiveWorkspace.ID)); err != nil {
+			if err := m.Compositor.Dispatch(ctx, "workspace", workspaceSelector(monitor.ActiveWorkspace)); err != nil {
 				return result, err
 			}
 		}
@@ -601,7 +699,7 @@ func matchWindows(saved []Window, current []hyprland.Window, cfg Config) (map[st
 	for _, slot := range saved {
 		bestIndex, bestScore := -1, -1
 		for i, candidate := range current {
-			if used[candidate.Address] || !candidate.Mapped || candidate.Hidden {
+			if candidate.Address == "" || used[candidate.Address] || !candidate.Mapped || candidate.Hidden || specialWorkspace(candidate.Workspace) || excluded(candidate, cfg.Exclude) {
 				continue
 			}
 			score := matchScore(slot, candidate, cfg)
@@ -740,16 +838,31 @@ func writeJSONAtomic(path string, value any) error {
 	return os.Rename(temporaryPath, path)
 }
 
-func launch(command []string) error {
-	cmd := exec.Command(command[0], command[1:]...)
-	cmd.Stdin = nil
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := cmd.Start(); err != nil {
+func launch(ctx context.Context, command []string) error {
+	executable, err := exec.LookPath(command[0])
+	if err != nil {
 		return err
 	}
-	return cmd.Process.Release()
+	args := []string{"--user", "--collect", "--quiet", "--service-type=exec", "--expand-environment=no"}
+	// Inherit values by name so environment secrets do not appear in argv.
+	// Each application gets its own cgroup, independent of DMS and this daemon.
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		switch name {
+		case "NOTIFY_SOCKET", "INVOCATION_ID", "JOURNAL_STREAM", "LISTEN_PID", "LISTEN_FDS", "LISTEN_FDNAMES", "WATCHDOG_PID", "WATCHDOG_USEC":
+			continue
+		}
+		args = append(args, "--setenv="+name)
+	}
+	args = append(args, "--", executable)
+	args = append(args, command[1:]...)
+	launchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(launchCtx, "systemd-run", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("start application service: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func snapWidth(value float64) float64 {
@@ -775,4 +888,15 @@ func abs(value int) int {
 		return -value
 	}
 	return value
+}
+
+func specialWorkspace(workspace hyprland.WorkspaceRef) bool {
+	return workspace.ID == -99 || strings.HasPrefix(workspace.Name, "special:") || workspace.Name == "special"
+}
+
+func workspaceSelector(workspace hyprland.WorkspaceRef) string {
+	if workspace.ID < 0 && workspace.Name != "" {
+		return "name:" + workspace.Name
+	}
+	return strconv.Itoa(workspace.ID)
 }

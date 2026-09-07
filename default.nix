@@ -1,6 +1,8 @@
 {
   lib,
   buildGoModule,
+  makeWrapper,
+  systemd,
   version ? "dev",
 }:
 buildGoModule {
@@ -11,6 +13,10 @@ buildGoModule {
   vendorHash = null;
   subPackages = ["cmd/danksession"];
   ldflags = ["-s" "-w" "-X main.version=${version}"];
+  nativeBuildInputs = [makeWrapper];
+  postInstall = ''
+    wrapProgram "$out/bin/danksession" --suffix PATH : ${lib.makeBinPath [systemd]}
+  '';
 
   meta = {
     description = "DankMaterialShell session restoration backend";

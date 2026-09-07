@@ -29,6 +29,7 @@ in {
         Description = "Capture and restore the DankSession desktop state";
         PartOf = ["graphical-session.target"];
         After = ["graphical-session.target"];
+        X-SwitchMethod = "keep-old";
       };
       Service = {
         ExecStart = "${cfg.package}/bin/danksession daemon";

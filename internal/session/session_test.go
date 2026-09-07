@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,6 +14,7 @@ import (
 type fakeCompositor struct {
 	desktop    hyprland.Desktop
 	dispatches [][2]string
+	failAt     int
 }
 
 func (f *fakeCompositor) Desktop(context.Context) (hyprland.Desktop, error) {
@@ -21,6 +23,9 @@ func (f *fakeCompositor) Desktop(context.Context) (hyprland.Desktop, error) {
 
 func (f *fakeCompositor) Dispatch(_ context.Context, dispatcher, argument string) error {
 	f.dispatches = append(f.dispatches, [2]string{dispatcher, argument})
+	if f.failAt > 0 && len(f.dispatches) == f.failAt {
+		return errors.New("injected dispatch failure")
+	}
 	return nil
 }
 
@@ -59,6 +64,7 @@ func testDesktop() hyprland.Desktop {
 		Windows:      []hyprland.Window{mail, scratch, zen},
 		Monitors:     []hyprland.Monitor{{ID: 1, Name: "DP-1", Width: 1000, Height: 1000, ActiveWorkspace: hyprland.WorkspaceRef{ID: 5, Name: "5"}}},
 		ActiveWindow: zen,
+		Workspaces:   []hyprland.Workspace{{ID: 5, TiledLayout: "scrolling"}},
 	}
 }
 
@@ -113,6 +119,7 @@ func TestCaptureWritesPrivateAtomicState(t *testing.T) {
 func TestRestoreDryRunPlansTopologyWithoutDispatching(t *testing.T) {
 	directory := t.TempDir()
 	compositor := &fakeCompositor{desktop: testDesktop()}
+	compositor.desktop.Windows = []hyprland.Window{compositor.desktop.Windows[0], compositor.desktop.Windows[2]}
 	manager := Manager{
 		Compositor: compositor,
 		StatePath:  filepath.Join(directory, "last.json"),
