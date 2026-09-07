@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"github.com/alcxyz/DankSession/internal/session"
 	"testing"
 )
@@ -21,6 +22,20 @@ func TestCaptureLoopStopsWhenCompositorDisconnects(t *testing.T) {
 	close(events)
 	if err := captureLoop(context.Background(), &session.Manager{}, session.DefaultConfig(), events, make(chan error)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCaptureLoopReportsErrorWhenBothChannelsClose(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		events := make(chan string)
+		eventErrors := make(chan error, 1)
+		failure := errors.New("socket connection failed")
+		eventErrors <- failure
+		close(events)
+		close(eventErrors)
+		if err := captureLoop(context.Background(), &session.Manager{}, session.DefaultConfig(), events, eventErrors); !errors.Is(err, failure) {
+			t.Fatalf("connection failure lost: %v", err)
+		}
 	}
 }
 

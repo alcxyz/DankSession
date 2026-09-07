@@ -189,6 +189,15 @@ func captureLoop(ctx context.Context, manager *session.Manager, cfg session.Conf
 			return nil
 		case event, open := <-events:
 			if !open {
+				// Events and errors close together. Do not lose a queued
+				// connection failure when select observes this channel first.
+				select {
+				case err := <-eventErrors:
+					if err != nil {
+						return err
+					}
+				default:
+				}
 				return nil
 			}
 			if captureEvent(event) {
