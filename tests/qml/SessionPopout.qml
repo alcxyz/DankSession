@@ -1,1 +1,0 @@
-../../SessionPopout.qml

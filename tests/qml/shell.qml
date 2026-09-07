@@ -12,7 +12,6 @@ ShellRoot {
     property real emptyHeight: 0
     property real shortHeight: 0
     property int actions: 0
-    property var panel: popoutLoader.item
 
     function check(value, message) {
         if (value) return
@@ -34,22 +33,13 @@ ShellRoot {
         visible: true
         implicitWidth: 400
         implicitHeight: 700
-        Item {
+        SessionWidget.SessionPopout {
+            id: panel
             width: 360
-            implicitHeight: popoutLoader.item ? popoutLoader.item.implicitHeight : 0
-            Loader {
-                id: popoutLoader
-                width: parent.width
-                Component.onCompleted: setSource(Qt.resolvedUrl("SessionPopout.qml"), {
-                    savedAge: "Saved 1 minute ago"
-                })
-            }
-            Connections {
-                target: popoutLoader.item
-                function onActionRequested(command, dryRun) {
-                    test.check(command === "restore" && dryRun, "preview signal must stay read-only")
-                    test.actions++
-                }
+            savedAge: "Saved 1 minute ago"
+            onActionRequested: (command, dryRun) => {
+                test.check(command === "restore" && dryRun, "preview signal must stay read-only")
+                test.actions++
             }
         }
     }

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.4 — QA
+
+- Keep the popout as a tested inline component so hot updates work even when Qt
+  retains an old directory listing. Avoid loading a newly added sibling file.
+
 ## 0.3.3 — QA
 
 - Refresh the nested popout component's cache when updating the plugin and test

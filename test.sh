@@ -37,7 +37,7 @@ has_match 'pluginId: "dankSession"' SessionWidget.qml
 has_match 'horizontalBarPill: compactBarIcon' SessionWidget.qml
 has_match 'verticalBarPill: compactBarIcon' SessionWidget.qml
 has_match 'SessionPopout' SessionWidget.qml
-has_match 'savedWindows' SessionPopout.qml
+has_match 'savedWindows' SessionWidget.qml
 has_match 'pluginId: "dankSession"' SessionSettings.qml
 has_match 'ExclusionEditor' SessionSettings.qml
 has_match '"danksession", "exclusions", "preview"' ExclusionEditor.qml
