@@ -23,6 +23,10 @@ At the first daemon start in each compositor session, the incoming snapshot is r
 
 The widget shows whether the capture daemon is running and provides a **Preview** action that does not move or launch windows. Enabling “Restore after login” sets a backend preference; enable `services.dankSession.autoStart` separately to start the daemon at graphical login.
 
+Restore closes the popout before changing the desktop so it cannot hold keyboard focus away from Hyprland's layout commands. Reopen the widget to inspect the result.
+
+After updating an installed plugin without restarting DMS, rescan it if its manifest changed, then run `dms ipc call plugins reload dankSession` **last**. Reload busts the QML component cache; disabling and enabling alone can leave an older widget running.
+
 ## Application rules
 
 DankSession never derives launch commands from `/proc` or saved process command lines. Applications must opt into relaunching through `~/.config/danksession/config.json`:
@@ -61,7 +65,7 @@ Relaunched applications run in independent systemd user services so stopping DMS
 
 ## QA limitations
 
-Column widths and centering are inferred from visible geometry, including an approximate gap allowance. Workspaces containing unsaved tiled windows are not reconstructed. Multi-window matching uses application identity and optional titles; the application is responsible for reopening its own documents/tabs. A successful unit test suite is not a substitute for testing a complete logout/login restore on the target compositor. Keep automatic restoration disabled until that test passes.
+Scrolling column widths are read directly from Hyprland's Lua layout state, including custom mouse-resized widths. Geometry-based width estimation remains a fallback when a window has no available layout state; centering is still inferred from visible geometry. Stacked row heights are restored through Hyprland's tiled resize API, subject to application minimum sizes and available output space. Workspaces containing unsaved tiled windows are not reconstructed. Non-scrolling tiled layouts do not yet support size restoration. Multi-window matching uses application identity and optional titles; the application is responsible for reopening its own documents/tabs. A successful unit test suite is not a substitute for testing a complete logout/login restore on the target compositor. Keep automatic restoration disabled until that test passes.
 
 ## Design
 
@@ -82,6 +86,11 @@ go build ./cmd/danksession
 bash test.sh
 nix build
 ```
+
+For an opt-in live scrolling-width and stacked-height test, run
+`DANKSESSION_LIVE_TEST=1 go test ./internal/session -run TestLiveScrollingSizeRestore -v`.
+It briefly focuses disposable `foot` windows on an unused workspace and restores
+the previous focus afterward. It uses temporary snapshots, never the user's saved session.
 
 ## License
 

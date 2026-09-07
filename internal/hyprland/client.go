@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"os/exec"
@@ -44,6 +45,7 @@ type Window struct {
 	FocusHistory     int          `json:"focusHistoryID"`
 	Tags             []string     `json:"tags"`
 	StableID         string       `json:"stableId"`
+	ColumnWidth      float64      `json:"-"`
 }
 
 type Monitor struct {
@@ -127,7 +129,73 @@ func (c *Client) Desktop(ctx context.Context) (Desktop, error) {
 	if err := c.query(ctx, "activewindow", &desktop.ActiveWindow); err != nil {
 		return Desktop{}, err
 	}
+	if err := c.scrollingWidths(ctx, &desktop); err != nil {
+		return Desktop{}, err
+	}
 	return desktop, nil
+}
+
+// Query every tiled scrolling window in one read-only Lua call. Client pixel
+// sizes include layout gaps and decorations and can still be animating, so
+// they cannot reliably recover the compositor's actual column fraction.
+func (c *Client) scrollingWidths(ctx context.Context, desktop *Desktop) error {
+	workspaces := map[int]bool{}
+	for _, workspace := range desktop.Workspaces {
+		workspaces[workspace.ID] = workspace.TiledLayout == "scrolling"
+	}
+	var indices []int
+	var addresses []string
+	for i, window := range desktop.Windows {
+		if window.Mapped && !window.Hidden && !window.Floating && workspaces[window.Workspace.ID] {
+			indices = append(indices, i)
+			addresses = append(addresses, strconv.Quote("address:"+window.Address))
+		}
+	}
+	if len(indices) == 0 {
+		return nil
+	}
+	expression := `return (function()
+local widths = {}
+for _, selector in ipairs({` + strings.Join(addresses, ",") + `}) do
+    local window = hl.get_window(selector)
+    local column = window and window.layout and window.layout.column
+    if column and type(column.width) == "number" then
+        widths[#widths + 1] = string.format("%.17g", column.width)
+    else
+        widths[#widths + 1] = "null"
+    end
+end
+return "[" .. table.concat(widths, ",") .. "]"
+end)()`
+	args, err := c.args(ctx, "repl", expression)
+	if err != nil {
+		return err
+	}
+	out, err := exec.CommandContext(ctx, c.Hyprctl, args...).Output()
+	if err != nil {
+		return fmt.Errorf("query scrolling column widths: %w", err)
+	}
+	return applyScrollingWidths(desktop, indices, out)
+}
+
+func applyScrollingWidths(desktop *Desktop, indices []int, data []byte) error {
+	var widths []*float64
+	if err := json.Unmarshal(data, &widths); err != nil {
+		return fmt.Errorf("decode scrolling column widths: %w", err)
+	}
+	if len(widths) != len(indices) {
+		return fmt.Errorf("scrolling column widths: got %d entries, expected %d", len(widths), len(indices))
+	}
+	for i, width := range widths {
+		if width == nil {
+			continue
+		}
+		if *width <= 0 || math.IsNaN(*width) || math.IsInf(*width, 0) {
+			return fmt.Errorf("scrolling column width must be finite and positive")
+		}
+		desktop.Windows[indices[i]].ColumnWidth = *width
+	}
+	return nil
 }
 
 func (c *Client) Dispatch(ctx context.Context, dispatcher, argument string) error {

@@ -304,7 +304,10 @@ func BuildSnapshot(desktop hyprland.Desktop, cfg Config, now time.Time) Snapshot
 					row++
 				}
 				logicalWidth := monitor.LogicalWidth()
-				width := snapWidth(float64(window.Size[0]+8) / float64(logicalWidth))
+				width := window.ColumnWidth
+				if width <= 0 {
+					width = snapWidth(float64(window.Size[0]+8) / float64(logicalWidth))
+				}
 				centered := abs((window.At[0]+window.Size[0]/2)-(monitor.X+logicalWidth/2)) <= 16
 				saved.Layout = &Layout{Name: "scrolling", Column: column, Row: row, ColumnWidth: width, Centered: centered}
 			}
@@ -628,9 +631,54 @@ func (m *Manager) Restore(ctx context.Context, dryRun, noLaunch bool) (result Re
 				if err := m.Compositor.Dispatch(ctx, "focuswindow", "address:"+current.Address); err != nil {
 					return result, err
 				}
-				if err := m.Compositor.Dispatch(ctx, "layoutmsg", "movewindowto l"); err != nil {
+				if err := m.Compositor.Dispatch(ctx, "layoutmsg", "consume_or_expel prev"); err != nil {
 					return result, err
 				}
+			}
+		}
+	}
+
+	// A tiled pixel resize adjusts the preceding row's bottom boundary for
+	// every non-first row. Work upward so later resizes do not disturb rows
+	// already restored; the first row receives the remaining height. Do this
+	// before column widths because Hyprland can clamp width during resizing.
+	var heightWindows []Window
+	for _, saved := range snapshot.Windows {
+		_, ok := matches[saved.Slot]
+		if !ok || saved.Layout == nil || saved.Layout.Name != "scrolling" || saved.Layout.Row == 0 || saved.Floating || saved.Fullscreen != 0 || layouts[saved.Workspace.ID] != "scrolling" {
+			continue
+		}
+		hasPreviousRow := false
+		for _, sibling := range workspaceWindows[saved.Workspace.ID] {
+			if sibling.Layout.Column == saved.Layout.Column && sibling.Layout.Row < saved.Layout.Row {
+				_, hasPreviousRow = matches[sibling.Slot]
+				if hasPreviousRow {
+					break
+				}
+			}
+		}
+		if hasPreviousRow {
+			heightWindows = append(heightWindows, saved)
+		}
+	}
+	sort.SliceStable(heightWindows, func(i, j int) bool {
+		if heightWindows[i].Workspace.ID != heightWindows[j].Workspace.ID {
+			return heightWindows[i].Workspace.ID < heightWindows[j].Workspace.ID
+		}
+		if heightWindows[i].Layout.Column != heightWindows[j].Layout.Column {
+			return heightWindows[i].Layout.Column < heightWindows[j].Layout.Column
+		}
+		return heightWindows[i].Layout.Row > heightWindows[j].Layout.Row
+	})
+	for _, saved := range heightWindows {
+		current := matches[saved.Slot]
+		result.Operations = append(result.Operations, Operation{Kind: "row-height", Slot: saved.Slot, Detail: strconv.Itoa(saved.Size[1])})
+		if !dryRun {
+			if err := m.Compositor.Dispatch(ctx, "focuswindow", "address:"+current.Address); err != nil {
+				return result, err
+			}
+			if err := m.Compositor.Dispatch(ctx, "resizewindowpixel", fmt.Sprintf("exact %d %d,address:%s", saved.Size[0], saved.Size[1], current.Address)); err != nil {
+				return result, err
 			}
 		}
 	}

@@ -25,6 +25,7 @@ PluginComponent {
     property string _actionOutput: ""
     property string _configureSignature: ""
     property bool _settingsReady: false
+    readonly property bool actionBusy: actionProcess.running || restoreStart.running
 
     // DMS may retain plugin settings in memory across a Home Manager update.
     // Refresh only this plugin's persisted preferences before configuring the
@@ -86,11 +87,24 @@ PluginComponent {
     }
 
     function runAction(command, dryRun) {
-        if (actionProcess.running) return
+        if (actionBusy) return
         _actionOutput = ""
         actionError = false
         actionProcess.command = dryRun ? ["danksession", command, "--dry-run"] : ["danksession", command]
+        if (command === "restore" && !dryRun) {
+            // The clicked layer-shell popout owns keyboard focus. Release it
+            // before Hyprland's focus-dependent layout dispatchers run.
+            closePopout()
+            restoreStart.restart()
+            return
+        }
         actionProcess.running = true
+    }
+
+    Timer {
+        id: restoreStart
+        interval: 150
+        onTriggered: actionProcess.running = true
     }
 
     Component.onCompleted: {
@@ -234,14 +248,14 @@ PluginComponent {
                         height: 36
                         radius: Theme.cornerRadius
                         color: saveMouse.containsMouse ? Theme.withAlpha(Theme.primary, 0.3) : Theme.primary
-                        opacity: actionProcess.running ? 0.5 : 1
+                        opacity: root.actionBusy ? 0.5 : 1
                         StyledText { text: "Save now"; color: "#ffffff"; anchors.centerIn: parent }
                         MouseArea {
                             id: saveMouse
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            enabled: !actionProcess.running
+                            enabled: !root.actionBusy
                             onClicked: root.runAction("capture")
                         }
                     }
@@ -251,14 +265,14 @@ PluginComponent {
                         height: 36
                         radius: Theme.cornerRadius
                         color: restoreMouse.containsMouse ? Theme.withAlpha(Theme.primary, 0.25) : Theme.surfaceContainerHigh
-                        opacity: actionProcess.running || !root.sessionStatus.saved ? 0.5 : 1
+                        opacity: root.actionBusy || !root.sessionStatus.saved ? 0.5 : 1
                         StyledText { text: "Restore"; color: Theme.surfaceText; anchors.centerIn: parent }
                         MouseArea {
                             id: restoreMouse
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            enabled: !actionProcess.running && root.sessionStatus.saved
+                            enabled: !root.actionBusy && root.sessionStatus.saved
                             onClicked: root.runAction("restore")
                         }
                     }
@@ -268,12 +282,12 @@ PluginComponent {
                         height: 36
                         radius: Theme.cornerRadius
                         color: Theme.surfaceContainerHigh
-                        opacity: actionProcess.running || !root.sessionStatus.saved ? 0.5 : 1
+                        opacity: root.actionBusy || !root.sessionStatus.saved ? 0.5 : 1
                         StyledText { text: "Preview"; color: Theme.surfaceText; anchors.centerIn: parent }
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
-                            enabled: !actionProcess.running && root.sessionStatus.saved
+                            enabled: !root.actionBusy && root.sessionStatus.saved
                             onClicked: root.runAction("restore", true)
                         }
                     }

@@ -24,6 +24,100 @@ func savedManager(t *testing.T) (*Manager, *fakeCompositor) {
 	return m, f
 }
 
+func stackedManager(t *testing.T) (*Manager, *fakeCompositor) {
+	t.Helper()
+	m, f := savedManager(t)
+	first := f.desktop.Windows[1]
+	first.At = hyprland.Point{250, 0}
+	first.Size = hyprland.Point{492, 300}
+	middle := f.desktop.Windows[0]
+	middle.At = hyprland.Point{250, 308}
+	middle.Size = hyprland.Point{492, 400}
+	last := first
+	last.Address = "0x4"
+	last.Class, last.InitialClass = "third-app", "third-app"
+	last.At = hyprland.Point{250, 716}
+	last.Size = hyprland.Point{492, 284}
+	// Deliberately scrambled input verifies that capture records row order.
+	f.desktop.Windows = []hyprland.Window{middle, last, first}
+	if _, err := m.Capture(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for i := range f.desktop.Windows {
+		f.desktop.Windows[i].Size = hyprland.Point{742, 328}
+	}
+	return m, f
+}
+
+func TestRestoreStackedHeightsBottomUpBeforeColumnWidths(t *testing.T) {
+	m, f := stackedManager(t)
+	result, err := m.Restore(context.Background(), false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var heights [][2]string
+	widthSeen := false
+	stackPlacements := 0
+	for i, call := range f.dispatches {
+		if call == [2]string{"layoutmsg", "consume_or_expel prev"} {
+			stackPlacements++
+		}
+		if call == [2]string{"layoutmsg", "movewindowto l"} {
+			t.Fatal("restore used the obsolete scrolling row-placement command")
+		}
+		if call[0] == "layoutmsg" && strings.HasPrefix(call[1], "colresize ") {
+			widthSeen = true
+		}
+		if call[0] != "resizewindowpixel" {
+			continue
+		}
+		if widthSeen {
+			t.Fatalf("row resize after column width: %v", f.dispatches)
+		}
+		heights = append(heights, call)
+		_, address, _ := strings.Cut(call[1], ",")
+		if i == 0 || f.dispatches[i-1] != [2]string{"focuswindow", address} {
+			t.Fatalf("height resize did not target focused row: %v", f.dispatches)
+		}
+	}
+	want := [][2]string{{"resizewindowpixel", "exact 492 284,address:0x4"}, {"resizewindowpixel", "exact 492 400,address:0x2"}}
+	if len(heights) != len(want) || heights[0] != want[0] || heights[1] != want[1] || !widthSeen {
+		t.Fatalf("height order %v, want %v then column widths", heights, want)
+	}
+	if stackPlacements != 2 {
+		t.Fatalf("got %d row placements, want 2", stackPlacements)
+	}
+	var slots []string
+	for _, operation := range result.Operations {
+		if operation.Kind == "row-height" {
+			slots = append(slots, operation.Slot)
+		}
+	}
+	if len(slots) != 2 || slots[0] != "third-app#1" || slots[1] != "thunderbird#1" {
+		t.Fatalf("unexpected row height operations: %v", slots)
+	}
+}
+
+func TestRestoreStackedHeightsDryRunDoesNotDispatch(t *testing.T) {
+	m, f := stackedManager(t)
+	result, err := m.Restore(context.Background(), true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.dispatches) != 0 {
+		t.Fatalf("dry-run mutated desktop: %v", f.dispatches)
+	}
+	heights := 0
+	for _, operation := range result.Operations {
+		if operation.Kind == "row-height" {
+			heights++
+		}
+	}
+	if heights != 2 {
+		t.Fatalf("planned %d row resizes, want 2", heights)
+	}
+}
+
 func TestCaptureAndRestoreShareCrossProcessLock(t *testing.T) {
 	m, _ := savedManager(t)
 	other := *m

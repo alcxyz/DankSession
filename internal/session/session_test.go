@@ -97,6 +97,17 @@ func TestBuildSnapshotCapturesTitlesOnlyWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestBuildSnapshotUsesExactScrollingColumnWidth(t *testing.T) {
+	desktop := testDesktop()
+	// The pixel geometry is intentionally near the half-width preset. The
+	// compositor's actual fraction must win, without snapping or rounding.
+	desktop.Windows[2].ColumnWidth = 0.5123456789012345
+	snapshot := BuildSnapshot(desktop, DefaultConfig(), time.Now())
+	if got := snapshot.Windows[0].Layout.ColumnWidth; got != 0.5123456789012345 {
+		t.Fatalf("column width %v lost compositor precision", got)
+	}
+}
+
 func TestCaptureWritesPrivateAtomicState(t *testing.T) {
 	directory := t.TempDir()
 	manager := Manager{
@@ -179,4 +190,33 @@ func TestRestoreRebuildsColumnsAndReturnsFocus(t *testing.T) {
 	if last != [2]string{"focuswindow", "address:0x1"} {
 		t.Fatalf("last dispatch was %#v, want focus restoration", last)
 	}
+}
+
+func TestRestoreUsesCapturedColumnWidthAfterResize(t *testing.T) {
+	directory := t.TempDir()
+	compositor := &fakeCompositor{desktop: testDesktop()}
+	compositor.desktop.Windows[2].ColumnWidth = 0.5123456789012345
+	manager := Manager{
+		Compositor: compositor,
+		StatePath:  filepath.Join(directory, "last.json"),
+		ConfigPath: filepath.Join(directory, "config.json"),
+	}
+	if _, err := manager.Capture(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	compositor.desktop.Windows[2].ColumnWidth = 0.75
+	compositor.desktop.Windows[2].Size[0] = 742
+	if _, err := manager.Restore(context.Background(), false, true); err != nil {
+		t.Fatal(err)
+	}
+	for i, dispatch := range compositor.dispatches {
+		if dispatch != [2]string{"layoutmsg", "colresize 0.512346"} {
+			continue
+		}
+		if i == 0 || compositor.dispatches[i-1] != [2]string{"focuswindow", "address:0x1"} {
+			t.Fatalf("saved width restored to the wrong target: %#v", compositor.dispatches)
+		}
+		return
+	}
+	t.Fatalf("restore did not apply the captured non-preset width: %#v", compositor.dispatches)
 }
