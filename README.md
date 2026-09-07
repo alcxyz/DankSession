@@ -94,6 +94,12 @@ See [docs/adr](docs/adr/) for the decisions behind these boundaries.
 
 ## Development
 
+Every user-facing QA deployment must have a new `plugin.json` version: increment
+the patch for fixes and the minor for new features. Do not reuse a version for
+changed code deployed to QA. The manifest is the version source for both the DMS
+label and the Nix-built backend (`danksession --version`). Keep a short entry in
+`CHANGELOG.md` for each iteration; version bumps on `dev` do not publish releases.
+
 ```sh
 go test ./...
 go build ./cmd/danksession

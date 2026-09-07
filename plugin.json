@@ -2,7 +2,7 @@
   "id": "dankSession",
   "name": "DankSession",
   "description": "Capture and restore application windows, workspaces, and layout",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "alcxyz",
   "icon": "restore_page",
   "type": "widget",
@@ -10,6 +10,10 @@
   "component": "./SessionWidget.qml",
   "settings": "./SessionSettings.qml",
   "settings_schema": {
+    "autoCapture": {
+      "type": "boolean",
+      "default": true
+    },
     "autoRestore": {
       "type": "boolean",
       "default": false
