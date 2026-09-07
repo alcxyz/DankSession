@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 — QA
+
+- Use one compact icon in horizontal and vertical bars. Keep snapshot counts,
+  timestamps, and actions in the popout; show muted paused/stopped state and
+  retain error coloring.
+
 ## 0.2.0 — QA
 
 - Configure automatic saving and save frequency from plugin settings.

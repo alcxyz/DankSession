@@ -199,45 +199,18 @@ PluginComponent {
         }
     }
 
-    horizontalBarPill: Component {
-        Row {
-            spacing: Theme.spacingS
-            anchors.verticalCenter: parent.verticalCenter
+    // Keep the bar quiet; counts, timestamps, and actions belong in the popout.
+    horizontalBarPill: compactBarIcon
+    verticalBarPill: compactBarIcon
 
-            DankIcon {
-                name: "restore_page"
-                size: 16
-                color: root.hasError ? Theme.error : Theme.primary
-                anchors.verticalCenter: parent.verticalCenter
-            }
-
-            StyledText {
-                text: root.sessionStatus.saved ? (root.sessionStatus.windows + " saved") : "Session"
-                font.pixelSize: Theme.fontSizeMedium
-                color: Theme.surfaceText
-                anchors.verticalCenter: parent.verticalCenter
-            }
-        }
-    }
-
-    verticalBarPill: Component {
-        Column {
-            spacing: 1
-            anchors.horizontalCenter: parent.horizontalCenter
-
-            StyledText {
-                text: root.sessionStatus.saved ? root.sessionStatus.windows : "–"
-                font.pixelSize: Theme.fontSizeSmall
-                color: root.hasError ? Theme.error : Theme.surfaceText
-                anchors.horizontalCenter: parent.horizontalCenter
-            }
-
-            StyledText {
-                text: "sess"
-                font.pixelSize: Theme.fontSizeSmall
-                color: Theme.surfaceVariantText
-                anchors.horizontalCenter: parent.horizontalCenter
-            }
+    Component {
+        id: compactBarIcon
+        DankIcon {
+            name: "restore_page"
+            size: root.iconSize
+            color: root.hasError ? Theme.error
+                : (root.sessionStatus.daemonRunning && root.autoCapture
+                    ? Theme.primary : Theme.surfaceVariantText)
         }
     }
 

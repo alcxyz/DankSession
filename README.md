@@ -26,6 +26,10 @@ At the first daemon start in each compositor session, the incoming snapshot is r
 
 The widget shows whether the capture daemon is running and provides a **Preview** action that does not move or launch windows. Enabling “Restore after login” sets a backend preference; enable `services.dankSession.autoStart` separately to start the daemon at graphical login.
 
+The bar shows only the session icon: accented while automatic saving is running,
+muted while paused or stopped, and red on errors. Click it for window counts,
+the last save time, and Save now, Restore, and Preview actions.
+
 In plugin settings, **Automatic saving** pauses or resumes background capture without stopping the daemon. **Save frequency** controls periodic safety saves (5–120 seconds, default 15); desktop events can save sooner. Preference changes are picked up by the running daemon without a restart. Manual **Save now** remains available while automatic saving is paused. A stopped-service warning explains when automatic saving and login restoration are unavailable.
 
 ### Application exclusions
