@@ -24,8 +24,37 @@ PluginComponent {
     property string _statusOutput: ""
     property string _actionOutput: ""
     property string _configureSignature: ""
+    property bool _settingsReady: false
+
+    // DMS may retain plugin settings in memory across a Home Manager update.
+    // Refresh only this plugin's persisted preferences before configuring the
+    // backend, including when the widget is reloaded without restarting DMS.
+    FileView {
+        id: persistedSettings
+        path: SettingsData.pluginSettingsPath
+        blockLoading: true
+        watchChanges: true
+        onFileChanged: reload()
+        onLoaded: {
+            try {
+                var saved = JSON.parse(text())[root.pluginId] || {}
+                var keys = ["autoRestore", "captureUnconfigured", "captureTitles", "captureInterval", "restoreTimeout"]
+                for (var key of keys) {
+                    if (saved[key] !== undefined && root.pluginService
+                            && root.pluginService.loadPluginData(root.pluginId, key, undefined) !== saved[key]) {
+                        root.pluginService.savePluginData(root.pluginId, key, saved[key])
+                    }
+                }
+                root._settingsReady = true
+                root.loadSettings()
+            } catch (error) {
+                root.configureError = true
+            }
+        }
+    }
 
     function loadSettings() {
+        if (!_settingsReady) return
         if (!pluginService || !pluginService.loadPluginData) return
         autoRestore = pluginService.loadPluginData(pluginId, "autoRestore", false) === true
         captureUnconfigured = pluginService.loadPluginData(pluginId, "captureUnconfigured", true) !== false
