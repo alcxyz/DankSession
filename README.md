@@ -2,9 +2,91 @@
 
 Application session restoration for [DankMaterialShell](https://github.com/AvengeMedia/DankMaterialShell). DankSession remembers open windows, workspaces, outputs, scrolling-column widths, focused windows, and floating geometry. A single Go binary provides the continuously running backend and the command-line interface used by the DMS widget.
 
-## Status
+![DankSession showing saved windows, workspaces, and restore actions](assets/screenshot.png)
 
-DankSession is under pre-release QA. It is not ready for unattended restoration yet; the Home Manager module installs its daemon without enabling automatic startup by default.
+## Installation
+
+DankSession supports Hyprland. It requires DankMaterialShell, `hyprctl`, and the
+`danksession` Go backend. Relaunching applications also requires systemd 254 or
+newer. Scrolling size restoration targets Hyprland's Lua-based scrolling layout;
+other compositors are not supported yet.
+
+Installing the DMS widget alone does not install or start the backend. Configure
+explicit [application rules](#application-rules), start the background service,
+and use **Preview** before enabling **Restore after login** in plugin settings.
+Automatic saving is enabled by default; automatic restoration is opt-in.
+
+### Nix / Home Manager
+
+Add the release as a flake input:
+
+```nix
+inputs.danksession.url = "github:alcxyz/DankSession/v0.3.5";
+```
+
+In your Home Manager configuration (with `inputs` available):
+
+```nix
+{ inputs, pkgs, ... }: {
+  imports = [ inputs.danksession.homeManagerModules.default ];
+
+  services.dankSession = {
+    enable = true;
+    package = inputs.danksession.packages.${pkgs.stdenv.hostPlatform.system}.default;
+    autoStart = true;
+  };
+
+  # Uses the Home Manager module supplied by DankMaterialShell.
+  programs.dank-material-shell.plugins.dankSession = {
+    enable = true;
+    src = inputs.danksession.outPath;
+  };
+}
+```
+
+The service starts with the next graphical session. The module's `autoStart`
+default remains `false` so installing it does not silently enable restoration.
+Enable the plugin and add its widget to your DMS bar as needed.
+
+### Manual installation
+
+Build the backend from the same release as the widget (Go 1.24 or newer):
+
+```sh
+git clone --branch v0.3.5 https://github.com/alcxyz/DankSession.git
+cd DankSession
+go build -ldflags '-X main.version=0.3.5' -o danksession ./cmd/danksession
+install -Dm755 danksession "$HOME/.local/bin/danksession"
+mkdir -p "$HOME/.config/DankMaterialShell/plugins/DankSession"
+cp plugin.json SessionWidget.qml SessionSettings.qml ExclusionEditor.qml \
+  "$HOME/.config/DankMaterialShell/plugins/DankSession/"
+```
+
+Ensure `~/.local/bin` is in DMS's `PATH`. Enable DankSession in DMS plugin settings
+and add it to your bar. Registry installation supplies the widget files; the
+backend and service still need to be installed separately.
+
+Create `~/.config/systemd/user/danksession.service`:
+
+```ini
+[Unit]
+Description=Capture and restore the DankSession desktop state
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/danksession daemon
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
+```
+
+Then run `systemctl --user daemon-reload` and
+`systemctl --user enable --now danksession.service`. Your graphical session must
+activate `graphical-session.target` and provide Hyprland's environment to the
+systemd user manager. Check `danksession status` for `daemonRunning: true`.
 
 ## Commands
 
@@ -88,7 +170,7 @@ Restoration applies current exclusions to older snapshots, skips disconnected ou
 
 Relaunched applications run in independent systemd user services so stopping DMS or the capture daemon does not terminate them. This requires `systemd-run` (systemd 254 or newer); the Nix package supplies it. Launch arguments are passed literally, and only explicitly configured application commands are started.
 
-## QA limitations
+## Restore limitations
 
 Scrolling column widths are read directly from Hyprland's Lua layout state, including custom mouse-resized widths. Geometry-based width estimation remains a fallback when a window has no available layout state; centering is still inferred from visible geometry. Stacked row heights are restored through Hyprland's tiled resize API, subject to application minimum sizes and available output space. Workspaces containing unsaved tiled windows are not reconstructed. Non-scrolling tiled layouts do not yet support size restoration. Multi-window matching uses application identity and optional titles; the application is responsible for reopening its own documents/tabs. A successful unit test suite is not a substitute for testing a complete logout/login restore on the target compositor. Keep automatic restoration disabled until that test passes.
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.5 — 2026-09-07
+
+First public release after local QA.
+
+- Automatic and manual session saving, opt-in login restoration, and explicit
+  application relaunch rules.
+- Restore workspaces, outputs, floating geometry, scrolling-column widths, and
+  stacked-window heights, with documented layout limitations.
+- Configurable save frequency and application exclusions, including selection
+  from open applications.
+- Compact bar icon and a saved-window list with workspaces, dimensions, and
+  restore eligibility.
+- Add the listing screenshot and Nix/manual installation instructions.
+
 ## 0.3.4 — QA
 
 - Keep the popout as a tested inline component so hot updates work even when Qt

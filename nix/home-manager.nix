@@ -17,7 +17,7 @@ in {
     autoStart = lib.mkOption {
       type = lib.types.bool;
       default = false;
-      description = "Start the capture daemon with the graphical session. Disabled by default during QA.";
+      description = "Start the capture daemon with the graphical session. Automatic restoration is configured separately.";
     };
   };
 

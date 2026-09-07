@@ -2,7 +2,7 @@
   "id": "dankSession",
   "name": "DankSession",
   "description": "Capture and restore application windows, workspaces, and layout",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "author": "alcxyz",
   "icon": "restore_page",
   "type": "widget",
