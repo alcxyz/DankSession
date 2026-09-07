@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.3 — QA
+
+- Refresh the nested popout component's cache when updating the plugin and test
+  its dynamic loader as well as the content layout.
+
 ## 0.3.2 — QA
 
 - Measure the dynamically loaded popout through its wrapper item, keeping

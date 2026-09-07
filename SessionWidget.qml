@@ -217,7 +217,7 @@ PluginComponent {
                 width: parent.width
                 // An explicit URL also works when DMS cached the plugin directory
                 // before this component was added, without restarting the shell.
-                Component.onCompleted: setSource(Qt.resolvedUrl("SessionPopout.qml"), {
+                Component.onCompleted: setSource(Qt.resolvedUrl("SessionPopout.qml") + "?v=0.3.3", {
                     sessionStatus: Qt.binding(() => root.sessionStatus),
                     savedAge: Qt.binding(() => root.savedAge),
                     autoCapture: Qt.binding(() => root.autoCapture),
