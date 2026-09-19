@@ -50,14 +50,14 @@ inputs.danksession.url = "github:alcxyz/DankSession/v0.3.5";
 
   services.dankSession = {
     enable = true;
-    package = inputs.danksession.packages.${pkgs.stdenv.hostPlatform.system}.default;
+    package = inputs.danksession.packages.${pkgs.stdenv.hostPlatform.system}.release;
     autoStart = true;
   };
 
-  # Uses the Home Manager module supplied by DankMaterialShell.
+  # Use the plugin files staged beside the same helper build.
   programs.dank-material-shell.plugins.dankSession = {
     enable = true;
-    src = inputs.danksession.outPath;
+    src = "${inputs.danksession.packages.${pkgs.stdenv.hostPlatform.system}.release}/share/dms-plugins/DankSession";
   };
 }
 ```
@@ -67,15 +67,15 @@ The service starts with the next graphical session. `autoStart` defaults to
 
 ### Manual
 
-Build the backend from the same release as the widget (Go 1.24 or newer):
+Package the backend and widget together (Go 1.24 or newer and Python 3):
 
 ```sh
 git clone --branch v0.3.5 https://github.com/alcxyz/DankSession.git
 cd DankSession
-go build -ldflags '-X main.version=0.3.5' -o danksession ./cmd/danksession
-install -Dm755 danksession "$HOME/.local/bin/danksession"
+python3 scripts/package.py --release --output dist/release
+install -Dm755 dist/release/bin/danksession "$HOME/.local/bin/danksession"
 mkdir -p "$HOME/.config/DankMaterialShell/plugins/DankSession"
-cp plugin.json SessionWidget.qml SessionSettings.qml ExclusionEditor.qml \
+cp -R dist/release/share/dms-plugins/DankSession/. \
   "$HOME/.config/DankMaterialShell/plugins/DankSession/"
 ```
 
@@ -127,3 +127,24 @@ to the systemd user manager. Ensure `~/.local/bin` is in DMS's `PATH`.
 ## License
 
 [MIT](LICENSE)
+
+## Build identity
+
+The tracked `plugin.json` remains a release version. Development packages stamp
+`X.Y.Z-dev.<commit>` (plus `.dirty` for local changes) into both the helper and
+the installed manifest. Build them with:
+
+```sh
+python3 scripts/package.py --output dist/dev
+```
+
+Install `dist/dev/bin/danksession` and use
+`dist/dev/share/dms-plugins/DankSession` as the DMS plugin directory. In Nix,
+use `packages.<system>.default` and its `share/dms-plugins/DankSession`
+subdirectory, passing the source revision when using `callPackage`.
+
+Release packages use the stable version: manual `--release` requires a clean
+checkout at the manifest's `vX.Y.Z` tag; use `#release` with a published tag for
+Nix release builds. Source-only Nix imports use a public-source fingerprint;
+manual archives without Git metadata are labelled `dev.unknown`. Direct
+`go build` identifies the helper's commit but does not stage a DMS manifest.

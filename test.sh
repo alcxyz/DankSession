@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+python3 -m unittest discover -s tests -p 'test_package.py'
+
 # The shared CI runner does not necessarily provide ripgrep.
 has_match() {
   if command -v rg >/dev/null 2>&1; then

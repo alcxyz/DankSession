@@ -33,7 +33,7 @@ func run(args []string) error {
 		return nil
 	}
 	if args[0] == "--version" || args[0] == "version" {
-		fmt.Println(version)
+		fmt.Println(buildVersion())
 		return nil
 	}
 

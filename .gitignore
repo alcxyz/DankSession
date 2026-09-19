@@ -3,3 +3,9 @@
 /.direnv/
 /.envrc
 *.tmp
+
+dist/
+
+__pycache__/
+
+*.pyc
