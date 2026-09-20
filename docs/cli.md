@@ -14,7 +14,7 @@ the widget calls.
 | `danksession exclusions preview` | Read a JSON matcher from stdin and preview matching open windows |
 | `danksession exclusions update` | Read a revision-checked exclusion edit from stdin |
 | `danksession daemon` | Capture window events and optionally restore after login |
-| `danksession --version` | Print the backend version (matches `plugin.json`) |
+| `danksession --version` | Print the backend version (matches the packaged `plugin.json`) |
 
 Capture and restore commands are mutually exclusive, including commands
 started by the widget while the daemon is running. Check `danksession status`

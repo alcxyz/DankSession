@@ -7,12 +7,12 @@ together.
 
 ## Versioning
 
-Every user-facing QA deployment must have a new `plugin.json` version:
-increment the patch for fixes and the minor for new features. Do not reuse a
-version for changed code deployed to QA. The manifest is the version source
-for both the DMS label and the Nix-built backend (`danksession --version`).
-Keep a short entry in `CHANGELOG.md` for each iteration; version bumps on
-`dev` do not publish releases.
+Keep `plugin.json` at the current release version during ordinary development.
+Packaged QA builds add `dev.<commit>` to that base version in both the staged
+manifest and backend (`danksession --version`), so each build remains
+identifiable without consuming a release version. Increment the patch for
+fixes or the minor for features on the release branch. Keep a short entry in
+`CHANGELOG.md` for each iteration.
 
 ## Checks
 
@@ -22,7 +22,7 @@ Before opening a pull request, run:
 go test ./...
 go build ./cmd/danksession
 bash test.sh
-nix build
+nix build 'path:.#default'
 ```
 
 `QT_QPA_PLATFORM=offscreen quickshell -p tests/qml --no-duplicate` runs

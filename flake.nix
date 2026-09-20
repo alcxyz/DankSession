@@ -20,8 +20,9 @@
         version = (builtins.fromJSON (builtins.readFile ./plugin.json)).version;
       in {
         packages = rec {
-          danksession = pkgs.callPackage ./default.nix {inherit version;};
+          danksession = pkgs.callPackage ./default.nix { inherit version; revision = self.rev or self.dirtyRev or null; };
           default = danksession;
+          release = danksession.override { release = true; };
         };
 
         devShells.default = pkgs.mkShell {
